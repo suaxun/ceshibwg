@@ -501,6 +501,72 @@ async function refreshGallery() {
         grid.html('<div style="text-align:center; padding:20px;">加载失败</div>');
     }
 }
+// ====== 请把下面这段代码插入到 refreshGallery() 和 renderItems() 之间 ======
+
+// --- 本地过滤与渲染分发 ---
+function applyFiltersAndRender() {
+    let filtered = allFetchedItems;
+
+    // 1. 关键词搜索过滤 (匹配名字、标题、描述、标签)
+    if (currentSearchQuery) {
+        const q = currentSearchQuery.toLowerCase();
+        filtered = filtered.filter(item => {
+            const p = item._parsed;
+            const textToSearch = `${p.name||''} ${p.title||''} ${p.description||''} ${(p.tags||[]).join(' ')}`.toLowerCase();
+            return textToSearch.includes(q);
+        });
+    }
+
+    // 2. 提取当前过滤结果中所有的有效标签
+    const tagSet = new Set();
+    filtered.forEach(item => {
+        if (item._parsed && item._parsed.tags) {
+            item._parsed.tags.forEach(t => tagSet.add(t));
+        }
+    });
+    const availableTags = Array.from(tagSet).sort();
+
+    // 3. 标签匹配过滤
+    if (currentSelectedTag) {
+        // 如果当前选中的标签因为搜索被过滤掉了，就取消选中
+        if (!availableTags.includes(currentSelectedTag)) {
+            currentSelectedTag = '';
+        } else {
+            filtered = filtered.filter(item => item._parsed && item._parsed.tags && item._parsed.tags.includes(currentSelectedTag));
+        }
+    }
+
+    // 4. 更新界面
+    renderTags(availableTags);
+    renderItems(filtered);
+}
+
+// --- 渲染顶部标签条 ---
+function renderTags(tags) {
+    const container = $('#museum-tag-container');
+    container.empty();
+    
+    if (tags.length === 0) return;
+
+    tags.forEach(tag => {
+        const isActive = tag === currentSelectedTag ? 'active' : '';
+        const $btn = $(`<div class="museum-tag ${isActive}">${tag}</div>`);
+        
+        $btn.on('click', () => {
+            // 点击标签：如果已选中则取消，如果未选中则选中
+            if (currentSelectedTag === tag) {
+                currentSelectedTag = ''; 
+            } else {
+                currentSelectedTag = tag; 
+            }
+            applyFiltersAndRender();
+        });
+        
+        container.append($btn);
+    });
+}
+
+// ====== 插入结束 ======
 
 
 // 格式化时间辅助函数
