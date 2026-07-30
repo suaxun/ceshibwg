@@ -891,6 +891,135 @@ async function importBeautifyDirectly(item, $card) {
     }
     setTimeout(() => btn.html(originalText), 2000);
 }
+// ====== 新增：一键抓取并上传主题功能 ======
+async function handleAutoCaptureTheme() {
+    if (!supabase || !session) {
+        toast.error("请先在设置中连接并登录 Supabase");
+        return;
+    }
+
+    const themeName = prompt("给你的主题起个名字：", "我的自定义主题");
+    if (!themeName) return;
+
+    const themeCategory = prompt("给主题打上标签 (空格隔开，直接点确定表示不加标签)：", "自用 莫兰迪");
+
+    const $btn = $('#museum-auto-capture-theme');
+    const originalText = $btn.html();
+    $btn.html('<i class="fa-solid fa-spinner fa-spin"></i> 正在抓取页面和配置...').css('pointer-events', 'none');
+    toast.info("正在抓取屏幕并生成 JSON 文件，由于渲染截图，页面可能会卡顿几秒钟，请稍候...");
+
+    try {
+        // 1. 获取酒馆当前的全局 CSS 变量（原汁原味还原当前主题）
+        const rs = getComputedStyle(document.documentElement);
+        const getVar = (name) => (rs.getPropertyValue(name) || "").trim();
+
+        // 构造酒馆标准的 Theme JSON 格式
+        const themeJsonObj = {
+            main_text_color: getVar('--SmartThemeBodyColor') || "rgba(255,255,255,1)",
+            italics_text_color: getVar('--SmartThemeEmColor') || "rgba(255,255,255,1)",
+            underline_text_color: getVar('--SmartThemeUColor') || "rgba(255,255,255,1)",
+            quote_text_color: getVar('--SmartThemeQuoteColor') || "rgba(255,255,255,1)",
+            shadow_color: getVar('--SmartThemeShadowColor') || "rgba(0,0,0,1)",
+            chat_tint_color: getVar('--SmartThemeChatTintColor') || "rgba(0,0,0,0.5)",
+            blur_tint_color: getVar('--SmartThemeBlurTintColor') || "rgba(0,0,0,0.5)",
+            border_color: getVar('--SmartThemeBorderColor') || "rgba(255,255,255,0.2)",
+            user_mes_blur_tint_color: getVar('--SmartThemeUserMesBlurTintColor') || "rgba(0,0,0,0.5)",
+            bot_mes_blur_tint_color: getVar('--SmartThemeBotMesBlurTintColor') || "rgba(0,0,0,0.5)"
+        };
+
+        const jsonString = JSON.stringify(themeJsonObj, null, 2);
+        const jsonBlob = new Blob([jsonString], { type: "application/json" });
+
+        // 2. 加载 html2canvas 库（如果本地没有）
+        if (!window.html2canvas) {
+            await new Promise((res, rej) => {
+                const script = document.createElement('script');
+                script.src = "https://html2canvas.hertzen.com/dist/html2canvas.min.js";
+                script.onload = res;
+                script.onerror = rej;
+                document.head.appendChild(script);
+            });
+        }
+
+        // 3. 截图准备：临时将所有左右抽屉面板变透明，使截图区域干净
+        const drawers = $('.drawer');
+        drawers.css('opacity', '0'); 
+        
+        // 等待 100ms 确保 CSS 渲染生效
+        await new Promise(r => setTimeout(r, 100));
+
+        // 抓取全屏
+        const canvas = await html2canvas(document.body, {
+            useCORS: true,
+            allowTaint: true,
+            backgroundColor: null // 允许透明
+        });
+
+        // 恢复所有抽屉面板显示
+        drawers.css('opacity', '1');
+
+        const imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+
+        // 4. 上传到 Supabase
+        const uid = session.user.id;
+        const timestamp = Date.now();
+        const rand = Math.random().toString(36).substr(2, 5);
+        
+        const imgName = `beautify_prev_${timestamp}_${rand}.png`;
+        const jsonName = `beautify_file_${timestamp}_${rand}.json`;
+
+        $btn.html('<i class="fa-solid fa-cloud-arrow-up"></i> 正在上传至云端...');
+
+        // 上传截图
+        const { error: imgErr } = await supabase.storage.from('uploads').upload(imgName, imgBlob);
+        if (imgErr) throw imgErr;
+        const imgUrl = supabase.storage.from('uploads').getPublicUrl(imgName).data.publicUrl;
+
+        // 上传 JSON
+        const { error: jsonErr } = await supabase.storage.from('uploads').upload(jsonName, jsonBlob);
+        if (jsonErr) throw jsonErr;
+        const jsonUrl = supabase.storage.from('uploads').getPublicUrl(jsonName).data.publicUrl;
+
+        // 5. 写入数据库条目 (构造符合美化数据结构的 JSON)
+        const contentObj = {
+            title: themeName,
+            variations: [
+                {
+                    name: "主配色",
+                    color: themeJsonObj.quote_text_color, // 取强调色作为小圆点的颜色
+                    preview: imgUrl,
+                    file: jsonUrl
+                }
+            ]
+        };
+
+        const payload = {
+            type: 'beautify',
+            category: themeCategory ? themeCategory.trim() : "快捷抓取",
+            content: JSON.stringify(contentObj),
+            file_url: imgUrl, // 默认封面
+            user_id: uid
+        };
+
+        const { error: dbErr } = await supabase.from('fragments').insert(payload);
+        if (dbErr) throw dbErr;
+
+        toast.success(`🎉 主题 "${themeName}" 已成功上传至博物馆！`);
+        
+        // 自动刷新画廊，并跳转到美化分类
+        currentFilter = 'beautify';
+        $('.museum-filter-btn').removeClass('active');
+        $(`[data-filter='beautify']`).addClass('active');
+        refreshGallery();
+
+    } catch (e) {
+        console.error("[Museum Capture Error]", e);
+        toast.error("上传失败: " + e.message);
+    } finally {
+        $btn.html(originalText).css('pointer-events', 'auto');
+    }
+}
+// ====== 新增结束 ======
 
 // --- 界面创建 ---
 function createSettingsHtml() {
@@ -910,7 +1039,6 @@ function createSettingsHtml() {
             </div>
 
             <div id="museum-auth-panel" class="museum-auth-box" style="display:none;">
-                <!-- 登录省略，和原来一样 -->
                 <small>Supabase 连接配置</small>
                 <input type="text" id="museum-sb-url" class="text_pole textarea_compact" placeholder="Supabase URL" value="${settings.sbUrl || ''}">
                 <input type="password" id="museum-sb-key" class="text_pole textarea_compact" placeholder="Supabase Key" value="${settings.sbKey || ''}">
@@ -925,10 +1053,15 @@ function createSettingsHtml() {
                 <div class="museum-filter-btn" data-filter="beautify">美化</div>
             </div>
 
-            <!-- 【新增】搜索框 -->
+            <!-- 【新增】：一键抓取主题并上传的按钮 -->
+            <button id="museum-auto-capture-theme" class="menu_button" style="width: 100%; margin-top: 5px; background-color: var(--SmartThemeQuoteColor); color: var(--SmartThemeBgColor);">
+                <i class="fa-solid fa-camera"></i> 一键抓取当前主题入库
+            </button>
+
+            <!-- 搜索框 -->
             <input type="text" id="museum-search-input" class="text_pole museum-search-box" placeholder="输入名称、描述或标签搜索...">
             
-            <!-- 【新增】标签容器 -->
+            <!-- 标签容器 -->
             <div id="museum-tag-container" class="museum-tags"></div>
 
             <div id="museum-grid" class="museum-grid">
@@ -940,6 +1073,7 @@ function createSettingsHtml() {
     </div>
     `;
 }
+
 
 
 // --- 初始化逻辑 ---
@@ -973,7 +1107,9 @@ function initializePlugin() {
 
     // 绑定事件
     $('#museum-config-toggle').on('click', () => $('#museum-auth-panel').slideToggle());
-    
+        // 绑定一键抓取主题事件
+    $('#museum-auto-capture-theme').on('click', handleAutoCaptureTheme);
+
     $('#museum-save-btn').on('click', async () => {
         const extSettings = getExtensionSettings()[EXTENSION_NAME];
         extSettings.sbUrl = $('#museum-sb-url').val().trim();
