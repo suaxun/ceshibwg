@@ -480,16 +480,24 @@ async function refreshGallery() {
         allFetchedItems = (data || []).map(item => {
             item._parsed = {};
             try {
-                if (item.content.startsWith('{')) {
+                if (item.content && item.content.startsWith('{')) {
                     item._parsed = JSON.parse(item.content);
                 } else {
                     item._parsed.name = item.content;
                 }
             } catch(e){}
-            // 确保 tags 是个数组
-            item._parsed.tags = Array.isArray(item._parsed.tags) ? item._parsed.tags : [];
+            
+            // 【修复关键】：标签实际上存在数据库的 category 字段里
+            let tags = [];
+            if (item.category) {
+                // 兼容中文逗号、英文逗号、空格分割
+                tags = item.category.replace(/，/g, ",").split(/[, \s]+/).filter(t => t && t.trim().length > 0);
+            }
+            item._parsed.tags = tags;
+            
             return item;
         });
+
 
         // 每次重新获取数据时，重置状态并触发渲染
         currentSelectedTag = '';
@@ -645,7 +653,14 @@ function renderItems(items) {
         const detailBtn = item.type === 'role_card' 
             ? `<div class="museum-action-btn secondary toggle-overlay-btn" title="查看详情与历史版本"><i class="fa-solid fa-list-ul"></i></div>` 
             : '';
-
+        let tagsHtml = '';
+        if (item._parsed && item._parsed.tags && item._parsed.tags.length > 0) {
+            tagsHtml = '<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:2px; margin-bottom:2px;">';
+            item._parsed.tags.forEach(t => {
+                tagsHtml += `<span style="font-size:0.7em; opacity:0.7; border:1px solid currentColor; padding:0 4px; border-radius:4px; cursor:pointer;" onclick="$('#museum-search-input').val('${t}').trigger('input');">#${t}</span>`;
+            });
+            tagsHtml += '</div>';
+        }
         const cardHtml = `
             <div class="museum-item" data-id="${item.id}">
                 <!-- 正面内容 -->
@@ -656,6 +671,7 @@ function renderItems(items) {
 
                 <div class="museum-info">
                     <div class="museum-title" title="${title}">${title}</div>
+                    ${tagsHtml}
                     ${colorDotsHtml}
                     <div class="museum-selected-idx" data-idx="0"></div>
                     
