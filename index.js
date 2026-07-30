@@ -906,7 +906,7 @@ async function handleAutoCaptureTheme() {
     const $btn = $('#museum-auto-capture-theme');
     const originalText = $btn.html();
     $btn.html('<i class="fa-solid fa-spinner fa-spin"></i> 正在抓取页面和配置...').css('pointer-events', 'none');
-    toast.info("正在抓取屏幕并生成 JSON 文件，由于渲染截图，页面可能会卡顿几秒钟，请稍候...");
+    toast.info("正在抓取纯净聊天界面，屏幕可能会闪烁一下，请稍候...");
 
     try {
         // 1. 获取酒馆当前的全局 CSS 变量（原汁原味还原当前主题）
@@ -941,12 +941,23 @@ async function handleAutoCaptureTheme() {
             });
         }
 
-        // 3. 抓取全屏 (保留页面当前原貌，不再隐藏左右面板)
+        // 3. 【核心修改】：临时隐藏所有不需要的 UI 元素，只留下纯净的 Chat 界面
+        // 隐藏的内容包括：所有侧边栏及图标(.drawer), 顶部栏(#top-bar), 提示信息(#toast-container), 浮动窗口(#movingDivs)
+        const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
+        $hiddenElements.hide(); 
+
+        // 等待 150 毫秒，确保浏览器完成重绘（此时画面上只有聊天框和背景）
+        await new Promise(r => setTimeout(r, 150));
+
+        // 抓取全屏
         const canvas = await html2canvas(document.body, {
             useCORS: true,
             allowTaint: true,
-            backgroundColor: null // 允许透明
+            backgroundColor: null // 允许透明，保留你原来的背景图
         });
+
+        // 截图完成，立刻恢复所有面板和按钮的显示！
+        $hiddenElements.show();
 
         const imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
 
@@ -970,7 +981,7 @@ async function handleAutoCaptureTheme() {
         if (jsonErr) throw jsonErr;
         const jsonUrl = supabase.storage.from('uploads').getPublicUrl(jsonName).data.publicUrl;
 
-        // 5. 写入数据库条目 (构造符合美化数据结构的 JSON)
+        // 5. 写入数据库条目
         const contentObj = {
             title: themeName,
             variations: [
@@ -1010,6 +1021,7 @@ async function handleAutoCaptureTheme() {
     }
 }
 // ====== 新增结束 ======
+
 
 
 // --- 界面创建 ---
