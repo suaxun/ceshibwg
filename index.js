@@ -941,22 +941,12 @@ async function handleAutoCaptureTheme() {
             });
         }
 
-        // 3. 截图准备：临时将所有左右抽屉面板变透明，使截图区域干净
-        const drawers = $('.drawer');
-        drawers.css('opacity', '0'); 
-        
-        // 等待 100ms 确保 CSS 渲染生效
-        await new Promise(r => setTimeout(r, 100));
-
-        // 抓取全屏
+        // 3. 抓取全屏 (保留页面当前原貌，不再隐藏左右面板)
         const canvas = await html2canvas(document.body, {
             useCORS: true,
             allowTaint: true,
             backgroundColor: null // 允许透明
         });
-
-        // 恢复所有抽屉面板显示
-        drawers.css('opacity', '1');
 
         const imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
 
@@ -1020,6 +1010,7 @@ async function handleAutoCaptureTheme() {
     }
 }
 // ====== 新增结束 ======
+
 
 // --- 界面创建 ---
 function createSettingsHtml() {
