@@ -921,6 +921,7 @@ async function handleAutoCaptureTheme() {
 
         // 构造酒馆标准的完全体 Theme JSON 格式
         const themeJsonObj = {
+            name: themeName, // 【核心修复：酒馆导入时必须需要这个 name 字段】
             main_text_color: getVar('--SmartThemeBodyColor') || "rgba(255,255,255,1)",
             italics_text_color: getVar('--SmartThemeEmColor') || "rgba(255,255,255,1)",
             underline_text_color: getVar('--SmartThemeUColor') || "rgba(255,255,255,1)",
