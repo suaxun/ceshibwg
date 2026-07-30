@@ -898,10 +898,16 @@ async function handleAutoCaptureTheme() {
         return;
     }
 
-    const themeName = prompt("给你的主题起个名字：", "我的自定义主题");
-    if (!themeName) return;
+    // 1. 【核心修改】自动获取酒馆里当前选中的主题名字
+    let themeName = $('#themes option:selected').text();
+    // 移除名字里可能自带的 "* " 星号（如果主题未保存，酒馆会加上星号）
+    if (themeName) {
+        themeName = themeName.replace(/^\*\s*/, '').trim(); 
+    } else {
+        themeName = "未命名主题";
+    }
 
-    const themeCategory = prompt("给主题打上标签 (空格隔开，直接点确定表示不加标签)：", "自用 莫兰迪");
+    const themeCategory = prompt("给主题打上标签 (空格隔开，直接点确定表示不加标签)：", "自用 主题");
 
     const $btn = $('#museum-auto-capture-theme');
     const originalText = $btn.html();
@@ -909,11 +915,11 @@ async function handleAutoCaptureTheme() {
     toast.info("正在抓取纯净聊天界面，屏幕可能会闪烁一下，请稍候...");
 
     try {
-        // 1. 获取酒馆当前的全局 CSS 变量（原汁原味还原当前主题）
+        // 2. 【核心修改】获取全局颜色 和 真正的 Custom CSS
         const rs = getComputedStyle(document.documentElement);
         const getVar = (name) => (rs.getPropertyValue(name) || "").trim();
 
-        // 构造酒馆标准的 Theme JSON 格式
+        // 构造酒馆标准的完全体 Theme JSON 格式
         const themeJsonObj = {
             main_text_color: getVar('--SmartThemeBodyColor') || "rgba(255,255,255,1)",
             italics_text_color: getVar('--SmartThemeEmColor') || "rgba(255,255,255,1)",
@@ -924,13 +930,15 @@ async function handleAutoCaptureTheme() {
             blur_tint_color: getVar('--SmartThemeBlurTintColor') || "rgba(0,0,0,0.5)",
             border_color: getVar('--SmartThemeBorderColor') || "rgba(255,255,255,0.2)",
             user_mes_blur_tint_color: getVar('--SmartThemeUserMesBlurTintColor') || "rgba(0,0,0,0.5)",
-            bot_mes_blur_tint_color: getVar('--SmartThemeBotMesBlurTintColor') || "rgba(0,0,0,0.5)"
+            bot_mes_blur_tint_color: getVar('--SmartThemeBotMesBlurTintColor') || "rgba(0,0,0,0.5)",
+            // 读取酒馆界面的 Custom CSS 文本框
+            customCSS: $('#customCSS').val() || "" 
         };
 
         const jsonString = JSON.stringify(themeJsonObj, null, 2);
         const jsonBlob = new Blob([jsonString], { type: "application/json" });
 
-        // 2. 加载 html2canvas 库（如果本地没有）
+        // 3. 加载 html2canvas 库
         if (!window.html2canvas) {
             await new Promise((res, rej) => {
                 const script = document.createElement('script');
@@ -941,27 +949,24 @@ async function handleAutoCaptureTheme() {
             });
         }
 
-        // 3. 【核心修改】：临时隐藏所有不需要的 UI 元素，只留下纯净的 Chat 界面
-        // 隐藏的内容包括：所有侧边栏及图标(.drawer), 顶部栏(#top-bar), 提示信息(#toast-container), 浮动窗口(#movingDivs)
+        // 4. 隐藏 UI 元素，截取纯净的 Chat 界面
         const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
         $hiddenElements.hide(); 
 
-        // 等待 150 毫秒，确保浏览器完成重绘（此时画面上只有聊天框和背景）
-        await new Promise(r => setTimeout(r, 150));
+        await new Promise(r => setTimeout(r, 150)); // 等待浏览器重绘
 
-        // 抓取全屏
         const canvas = await html2canvas(document.body, {
             useCORS: true,
             allowTaint: true,
-            backgroundColor: null // 允许透明，保留你原来的背景图
+            backgroundColor: null // 允许透明背景
         });
 
-        // 截图完成，立刻恢复所有面板和按钮的显示！
+        // 立刻恢复界面
         $hiddenElements.show();
 
         const imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
 
-        // 4. 上传到 Supabase
+        // 5. 上传截图和 JSON 到 Supabase
         const uid = session.user.id;
         const timestamp = Date.now();
         const rand = Math.random().toString(36).substr(2, 5);
@@ -971,23 +976,21 @@ async function handleAutoCaptureTheme() {
 
         $btn.html('<i class="fa-solid fa-cloud-arrow-up"></i> 正在上传至云端...');
 
-        // 上传截图
         const { error: imgErr } = await supabase.storage.from('uploads').upload(imgName, imgBlob);
         if (imgErr) throw imgErr;
         const imgUrl = supabase.storage.from('uploads').getPublicUrl(imgName).data.publicUrl;
 
-        // 上传 JSON
         const { error: jsonErr } = await supabase.storage.from('uploads').upload(jsonName, jsonBlob);
         if (jsonErr) throw jsonErr;
         const jsonUrl = supabase.storage.from('uploads').getPublicUrl(jsonName).data.publicUrl;
 
-        // 5. 写入数据库条目
+        // 6. 写入数据库条目
         const contentObj = {
-            title: themeName,
+            title: themeName, // 使用提取到的真实主题名字
             variations: [
                 {
                     name: "主配色",
-                    color: themeJsonObj.quote_text_color, // 取强调色作为小圆点的颜色
+                    color: themeJsonObj.quote_text_color, // 用强调色装饰小圆点
                     preview: imgUrl,
                     file: jsonUrl
                 }
@@ -1007,7 +1010,7 @@ async function handleAutoCaptureTheme() {
 
         toast.success(`🎉 主题 "${themeName}" 已成功上传至博物馆！`);
         
-        // 自动刷新画廊，并跳转到美化分类
+        // 自动跳转到美化界面并刷新列表
         currentFilter = 'beautify';
         $('.museum-filter-btn').removeClass('active');
         $(`[data-filter='beautify']`).addClass('active');
@@ -1021,6 +1024,7 @@ async function handleAutoCaptureTheme() {
     }
 }
 // ====== 新增结束 ======
+
 
 
 
