@@ -974,58 +974,60 @@ async function handleAutoCaptureTheme() {
         // 提取主题名字（去掉 .json 后缀）
         let themeName = fileName.replace(/\.json$/i, '');
         // ==========================================
-        // 2. 截取真正的浏览器画面 (Native Screen Capture)
-        // 完美解决所有 CSS 伪元素、外部跨域图片、高斯模糊问题
+        // 2. 截图当前聊天界面 (使用 html-to-image 完美还原复杂 CSS)
         // ==========================================
-        $btn.html('<i class="fa-solid fa-camera fa-spin"></i> 请在弹窗中选择分享【当前标签页】...');
-        toast.info("请在弹出的授权窗口中，选择分享【当前标签页】进行截图", 5000);
+        $btn.html('<i class="fa-solid fa-camera fa-spin"></i> 正在截取聊天预览图...');
+        toast.info("正在抓取界面，请稍候...");
+        
+        // 动态加载更强大的 html-to-image 库 (完美支持伪元素、多重背景)
+        if (!window.htmlToImage) {
+            await new Promise((res, rej) => {
+                const script = document.createElement('script');
+                // 使用官方 CDN 加载
+                script.src = "https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js";
+                script.onload = res;
+                script.onerror = rej;
+                document.head.appendChild(script);
+            });
+        }
 
-        // 隐藏多余面板，保证截图干净
+        // 隐藏多余的 UI 面板
         const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
         $hiddenElements.hide(); 
-        await new Promise(r => setTimeout(r, 200)); 
+        
+        // 强制取消所有图片的懒加载，防止截出透明头像
+        $('img[loading="lazy"]').attr('loading', 'eager');
+        
+        // 留出 800 毫秒给浏览器加载那些图床的外链图片
+        await new Promise(r => setTimeout(r, 800)); 
 
         let imgBlob;
         try {
-            // 调用浏览器原生 API 捕获真实画面
-            const stream = await navigator.mediaDevices.getDisplayMedia({
-                video: { displaySurface: "browser" }, // 推荐默认选中浏览器标签页
-                audio: false
+            // html-to-image 会利用浏览器的原生 SVG 引擎来画图，完美支持你的各种 ::before / ::after 和外部图片
+            imgBlob = await window.htmlToImage.toBlob(document.body, {
+                pixelRatio: window.devicePixelRatio || 1, // 保证高清
+                skipFonts: true, // 忽略外部字体加载避免卡顿
+                backgroundColor: null, // 必须为空，让你的 #bg1 背景透出来
+                // 精准过滤掉不需要截图的浮动 UI
+                filter: (node) => {
+                    if (node.classList && (
+                        node.classList.contains('drawer') || 
+                        node.id === 'top-bar' || 
+                        node.id === 'toast-container' || 
+                        node.id === 'movingDivs'
+                    )) {
+                        return false;
+                    }
+                    return true;
+                }
             });
-
-            // 将画面流连接到隐藏的 video 元素
-            const video = document.createElement('video');
-            video.srcObject = stream;
-            video.autoplay = true;
-
-            await new Promise((resolve, reject) => {
-                video.onloadedmetadata = resolve;
-                video.onerror = reject;
-            });
-
-            // 稍微等待几百毫秒，确保画面帧已渲染
-            await new Promise(r => setTimeout(r, 600));
-
-            // 将当前帧画入 Canvas
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            // 截图完毕，立即停止屏幕共享，不留小绿点
-            stream.getTracks().forEach(track => track.stop());
-
-            // 转换为 PNG Blob
-            imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-            
-            // 恢复界面显示
-            $hiddenElements.show(); 
         } catch (err) {
-            // 用户取消了分享或出错，恢复界面并中断
             $hiddenElements.show();
-            throw new Error("取消了截图或获取画面失败: " + err.message);
+            throw new Error("画面截取失败，可能是外链图片跨域限制: " + err.message);
         }
+
+        // 恢复界面 UI
+        $hiddenElements.show(); 
 
 
 
