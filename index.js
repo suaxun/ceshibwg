@@ -973,18 +973,16 @@ async function handleAutoCaptureTheme() {
 
         // 提取主题名字（去掉 .json 后缀）
         let themeName = fileName.replace(/\.json$/i, '');
-        // ==========================================
-        // 2. 截图当前聊天界面 (使用 html-to-image 完美还原复杂 CSS)
+         // ==========================================
+        // 2. 截图当前聊天界面 (CORS 代理方案，完美还原图床背景图)
         // ==========================================
         $btn.html('<i class="fa-solid fa-camera fa-spin"></i> 正在截取聊天预览图...');
         toast.info("正在抓取界面，请稍候...");
         
-        // 动态加载更强大的 html-to-image 库 (完美支持伪元素、多重背景)
-        if (!window.htmlToImage) {
+        if (!window.html2canvas) {
             await new Promise((res, rej) => {
                 const script = document.createElement('script');
-                // 使用官方 CDN 加载
-                script.src = "https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js";
+                script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
                 script.onload = res;
                 script.onerror = rej;
                 document.head.appendChild(script);
@@ -995,39 +993,71 @@ async function handleAutoCaptureTheme() {
         const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
         $hiddenElements.hide(); 
         
-        // 强制取消所有图片的懒加载，防止截出透明头像
+        // 强制取消图片的懒加载
         $('img[loading="lazy"]').attr('loading', 'eager');
         
-        // 留出 800 毫秒给浏览器加载那些图床的外链图片
-        await new Promise(r => setTimeout(r, 800)); 
+        await new Promise(r => setTimeout(r, 500)); 
 
         let imgBlob;
         try {
-            // html-to-image 会利用浏览器的原生 SVG 引擎来画图，完美支持你的各种 ::before / ::after 和外部图片
-            imgBlob = await window.htmlToImage.toBlob(document.body, {
-                pixelRatio: window.devicePixelRatio || 1, // 保证高清
-                skipFonts: true, // 忽略外部字体加载避免卡顿
-                backgroundColor: null, // 必须为空，让你的 #bg1 背景透出来
-                // 精准过滤掉不需要截图的浮动 UI
-                filter: (node) => {
-                    if (node.classList && (
-                        node.classList.contains('drawer') || 
-                        node.id === 'top-bar' || 
-                        node.id === 'toast-container' || 
-                        node.id === 'movingDivs'
-                    )) {
-                        return false;
-                    }
-                    return true;
+            const canvas = await html2canvas(document.body, {
+                useCORS: true,
+                allowTaint: false,
+                backgroundColor: null, // 保持透明底色
+                scale: window.devicePixelRatio || 1,
+                logging: false,
+                // 【核心黑科技】：在后台克隆的文档里，给所有外链图片套上代理
+                onclone: (clonedDoc) => {
+                    // a) 在克隆文档里隐藏UI，防止漏网之鱼
+                    clonedDoc.querySelectorAll('.drawer, #top-bar, #toast-container, #movingDivs').forEach(el => {
+                        el.style.setProperty('display', 'none', 'important');
+                    });
+
+                    // b) 洗白所有 <style> 标签中的外链图片 (针对你的 ::before 和 ::after)
+                    const styles = clonedDoc.querySelectorAll('style');
+                    styles.forEach(style => {
+                        if (style.innerHTML && style.innerHTML.includes('url(')) {
+                            style.innerHTML = style.innerHTML.replace(/url\(['"]?(https?:\/\/[^'")]+)['"]?\)/gi, (match, url) => {
+                                // 已经是代理或本地的就跳过
+                                if (url.includes('corsproxy.io') || url.includes(location.host)) return match;
+                                return `url('https://corsproxy.io/?${encodeURIComponent(url)}')`;
+                            });
+                        }
+                    });
+
+                    // c) 洗白所有行内样式的图片
+                    clonedDoc.querySelectorAll('*').forEach(el => {
+                        if (el.style && el.style.backgroundImage && el.style.backgroundImage.includes('url(')) {
+                            el.style.backgroundImage = el.style.backgroundImage.replace(/url\(['"]?(https?:\/\/[^'")]+)['"]?\)/gi, (match, url) => {
+                                if (url.includes('corsproxy.io') || url.includes(location.host)) return match;
+                                return `url('https://corsproxy.io/?${encodeURIComponent(url)}')`;
+                            });
+                        }
+                    });
+
+                    // d) 洗白所有 <img> 标签的外链图片
+                    clonedDoc.querySelectorAll('img').forEach(img => {
+                        if (img.src && img.src.startsWith('http') && !img.src.includes(location.host) && !img.src.includes('corsproxy.io')) {
+                            img.src = `https://corsproxy.io/?${encodeURIComponent(img.src)}`;
+                            img.crossOrigin = 'anonymous';
+                        }
+                    });
+
+                    // e) 移除高斯模糊 (截图引擎不支持模糊，会导致整块白屏或崩溃)
+                    const fixStyle = clonedDoc.createElement('style');
+                    fixStyle.innerHTML = `* { backdrop-filter: none !important; }`;
+                    clonedDoc.head.appendChild(fixStyle);
                 }
             });
-        } catch (err) {
-            $hiddenElements.show();
-            throw new Error("画面截取失败，可能是外链图片跨域限制: " + err.message);
-        }
 
-        // 恢复界面 UI
-        $hiddenElements.show(); 
+            imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        } catch (err) {
+            console.error(err);
+            throw new Error("画面截取失败: " + err.message);
+        } finally {
+            // 不管成功失败，最后一定要恢复界面 UI
+            $hiddenElements.show(); 
+        }
 
 
 
