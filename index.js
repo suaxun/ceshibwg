@@ -898,33 +898,44 @@ async function handleAutoCaptureTheme() {
         return;
     }
 
-    // 1. 【完美修复】直接从酒馆全局变量 window.themes 获取完美的主题数据
-    let themeIndex = $('#themes').val();
-    let themeJsonObj = {};
-    let themeName = "未命名主题";
-
-    if (window.themes && window.themes[themeIndex]) {
-        // 深拷贝酒馆自带的完整主题数据
-        themeJsonObj = JSON.parse(JSON.stringify(window.themes[themeIndex]));
-        themeName = themeJsonObj.name;
+    // 1. 获取酒馆里当前选中的主题名字
+    let themeName = $('#themes option:selected').text();
+    if (themeName) {
+        themeName = themeName.replace(/^\*\s*/, '').trim(); 
     } else {
-        toast.error("获取当前主题数据失败，请确保您选中了一个主题。");
-        return;
+        themeName = "未命名主题";
     }
 
     const themeCategory = prompt("给主题打上标签 (空格隔开，直接点确定表示不加标签)：", "自用 主题");
-    if (themeCategory === null) return; // 用户点击了取消
+    if (themeCategory === null) return;
 
     const $btn = $('#museum-auto-capture-theme');
     const originalText = $btn.html();
-    $btn.html('<i class="fa-solid fa-spinner fa-spin"></i> 正在抓取页面和配置...').css('pointer-events', 'none');
-    toast.info("正在抓取纯净聊天界面，屏幕可能会闪烁一下，请稍候...");
+    $btn.html('<i class="fa-solid fa-spinner fa-spin"></i> 正在抓取...').css('pointer-events', 'none');
+    toast.info("正在抓取纯净聊天界面，屏幕可能会闪烁一下...");
 
     try {
+        // 2. 【完美修复】读取酒馆现存的 10 个颜色，完全复刻酒馆官方 Export JSON 格式
+        const rs = getComputedStyle(document.documentElement);
+        const getVar = (name) => (rs.getPropertyValue(name) || "").trim();
+
+        const themeJsonObj = {
+            main_text_color: getVar('--SmartThemeBodyColor') || "rgba(255,255,255,1)",
+            italics_text_color: getVar('--SmartThemeEmColor') || "rgba(255,255,255,1)",
+            underline_text_color: getVar('--SmartThemeUColor') || "rgba(255,255,255,1)",
+            quote_text_color: getVar('--SmartThemeQuoteColor') || "rgba(255,255,255,1)",
+            shadow_color: getVar('--SmartThemeShadowColor') || "rgba(0,0,0,1)",
+            chat_tint_color: getVar('--SmartThemeChatTintColor') || "rgba(0,0,0,0.5)",
+            blur_tint_color: getVar('--SmartThemeBlurTintColor') || "rgba(0,0,0,0.5)",
+            border_color: getVar('--SmartThemeBorderColor') || "rgba(255,255,255,0.2)",
+            user_mes_blur_tint_color: getVar('--SmartThemeUserMesBlurTintColor') || "rgba(0,0,0,0.5)",
+            bot_mes_blur_tint_color: getVar('--SmartThemeBotMesBlurTintColor') || "rgba(0,0,0,0.5)"
+        };
+
         const jsonString = JSON.stringify(themeJsonObj, null, 2);
         const jsonBlob = new Blob([jsonString], { type: "application/json" });
 
-        // 3. 加载 html2canvas 库
+        // 3. 加载 html2canvas
         if (!window.html2canvas) {
             await new Promise((res, rej) => {
                 const script = document.createElement('script');
@@ -935,35 +946,39 @@ async function handleAutoCaptureTheme() {
             });
         }
 
-        // 4. 隐藏 UI 元素，截取纯净的 Chat 界面
+        // 4. 隐藏多余面板
         const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
         $hiddenElements.hide(); 
+        await new Promise(r => setTimeout(r, 150)); 
 
-        await new Promise(r => setTimeout(r, 150)); // 等待浏览器重绘
+        // 【完美修复】提取当前的背景底色，如果完全透明则给一个深色底，防止截图崩坏
+        let bgColor = getVar('--SmartThemeBgColor');
+        if (!bgColor || bgColor === 'transparent' || bgColor === 'rgba(0, 0, 0, 0)') {
+            bgColor = '#131516'; // 兜底深灰色
+        }
 
-        // 【完美修复】解决头像透明以及 iOS 内存爆掉的问题
         const canvas = await html2canvas(document.body, {
             useCORS: true,
             allowTaint: true,
-            // 获取当前 body 的真实背景色，防止头像变透明
-            backgroundColor: window.getComputedStyle(document.body).backgroundColor || '#131516',
-            // 限制截图精度(防 iOS 崩溃)，Retina 屏幕动辄 3 倍分辨率极易爆内存，强行锁为 1
-            scale: 1, 
+            backgroundColor: bgColor, // 填补背景，防止消息和头像变透明
+            scale: 1, // 强行将清晰度锁为1，极大降低 iOS 闪退率
             logging: false
         });
 
-        // 立刻恢复界面
+        // 恢复 UI
         $hiddenElements.show();
 
         const imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
 
-        // 5. 上传截图和 JSON 到 Supabase
+        // 5. 上传
         const uid = session.user.id;
         const timestamp = Date.now();
         const rand = Math.random().toString(36).substr(2, 5);
         
         const imgName = `beautify_prev_${timestamp}_${rand}.png`;
-        const jsonName = `beautify_file_${timestamp}_${rand}.json`;
+        // 文件名和当前酒馆里的名字完全一致，并过滤特殊字符
+        const safeThemeName = themeName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-_]/g, '_');
+        const jsonName = `${safeThemeName}_${timestamp}.json`;
 
         $btn.html('<i class="fa-solid fa-cloud-arrow-up"></i> 正在上传至云端...');
 
@@ -975,13 +990,13 @@ async function handleAutoCaptureTheme() {
         if (jsonErr) throw jsonErr;
         const jsonUrl = supabase.storage.from('uploads').getPublicUrl(jsonName).data.publicUrl;
 
-        // 6. 写入数据库条目
+        // 6. 入库
         const contentObj = {
-            title: themeName, // 使用最真实的名称
+            title: themeName,
             variations: [
                 {
                     name: "主配色",
-                    color: themeJsonObj.quote_text_color || "#ffffff",
+                    color: themeJsonObj.quote_text_color,
                     preview: imgUrl,
                     file: jsonUrl
                 }
@@ -999,9 +1014,8 @@ async function handleAutoCaptureTheme() {
         const { error: dbErr } = await supabase.from('fragments').insert(payload);
         if (dbErr) throw dbErr;
 
-        toast.success(`🎉 主题 "${themeName}" 已成功上传至博物馆！`);
+        toast.success(`🎉 主题 "${themeName}" 已成功上传！`);
         
-        // 自动跳转到美化界面并刷新列表
         currentFilter = 'beautify';
         $('.museum-filter-btn').removeClass('active');
         $(`[data-filter='beautify']`).addClass('active');
@@ -1010,14 +1024,12 @@ async function handleAutoCaptureTheme() {
     } catch (e) {
         console.error("[Museum Capture Error]", e);
         toast.error("上传失败: " + e.message);
-        // 确保界面恢复
-        $('.drawer, #top-bar, #toast-container, #movingDivs').show();
+        $('.drawer, #top-bar, #toast-container, #movingDivs').show(); // 确保出错了也会恢复UI
     } finally {
         $btn.html(originalText).css('pointer-events', 'auto');
     }
 }
-
-
+// ====== 修改结束 ======
 
 
 
@@ -1029,10 +1041,12 @@ function createSettingsHtml() {
     <div id="${EXTENSION_ID}" class="inline-drawer wide100p flexFlowColumn">
         <div class="inline-drawer-toggle inline-drawer-header">
             <b><i class="fa-solid fa-building-columns"></i> 博物馆 (Museum)</b>
+            <!-- 【修复】使用 down 代表默认折叠状态 -->
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
 
-        <div class="inline-drawer-content museum-drawer-content">
+        <!-- 【修复】加上 style="display: none;" 彻底让它默认关闭，拯救 iOS -->
+        <div class="inline-drawer-content museum-drawer-content" style="display: none;">
             <div class="flex-container">
                 <div class="menu_button fa-solid fa-arrows-rotate" id="museum-refresh-btn" title="刷新"></div>
                 <div class="menu_button fa-solid fa-gear" id="museum-config-toggle" title="设置"></div>
@@ -1053,7 +1067,6 @@ function createSettingsHtml() {
                 <div class="museum-filter-btn" data-filter="beautify">美化</div>
             </div>
 
-            <!-- 【新增】：一键抓取主题并上传的按钮 -->
             <button id="museum-auto-capture-theme" class="menu_button" style="width: 100%; margin-top: 5px; background-color: var(--SmartThemeQuoteColor); color: var(--SmartThemeBgColor);">
                 <i class="fa-solid fa-camera"></i> 一键抓取当前主题入库
             </button>
@@ -1066,7 +1079,7 @@ function createSettingsHtml() {
 
             <div id="museum-grid" class="museum-grid">
                 <div style="grid-column:1/-1; text-align:center; padding:20px; opacity:0.5; font-size:0.8em;">
-                    点击上方刷新按钮加载内容
+                    正在加载博物馆内容...
                 </div>
             </div>
         </div>
@@ -1147,17 +1160,15 @@ function initializePlugin() {
         refreshGallery();
     });
 
-    // 【完美修复】iOS 崩溃核心解法：延迟/懒加载
+    // 【完美修复】IOS崩溃关键：懒加载机制
     let hasLoadedGallery = false;
-    
-    // 监听博物馆抽屉的点击展开事件
+    // 监听酒馆原生下拉面板的点击事件
     $(`#${EXTENSION_ID} .inline-drawer-toggle`).on('click', function() {
-        const $content = $(this).next('.inline-drawer-content');
-        // 当内容即将展开（此刻为 hidden），且尚未加载过时触发
-        if ($content.is(':hidden') && !hasLoadedGallery) {
+        // 如果该区域尚未加载数据
+        if (!hasLoadedGallery) {
             hasLoadedGallery = true; // 标记为已加载
             
-            // 确保 Supabase 初始化后再去拉取
+            // 开始懒加载数据库
             loadSupabase().then(() => {
                 const s = getExtensionSettings()[EXTENSION_NAME];
                 if (s && s.sbUrl && s.sbKey) {
@@ -1165,7 +1176,7 @@ function initializePlugin() {
                         if (session) refreshGallery();
                     });
                 } else {
-                    $('#museum-grid').html('<div style="text-align:center; padding:20px; font-size:0.8em; opacity:0.7;">未配置数据库。<br>请点击上方齿轮配置。</div>');
+                    $('#museum-grid').html('<div style="text-align:center; padding:20px; font-size:0.8em; opacity:0.7;">未配置数据库。<br>请点击上方齿轮图标配置。</div>');
                 }
             });
         }
@@ -1189,3 +1200,5 @@ function initializePlugin() {
 
     waitForSillyTavernContext();
 })();
+
+
