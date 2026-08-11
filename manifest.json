@@ -6,6 +6,7 @@
     "description": "集成在扩展面板内的 Supabase 素材库，支持一键导入角色卡和主题。",
     "css": "style.css",
     "js": "index.js",
+    "source": "https://github.com/SillyTavern/SillyTavern", 
     "min_api": "1.0.0"
 }
 
