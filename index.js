@@ -974,67 +974,59 @@ async function handleAutoCaptureTheme() {
         // 提取主题名字（去掉 .json 后缀）
         let themeName = fileName.replace(/\.json$/i, '');
         // ==========================================
-        // 2. 截图当前聊天界面 (彻底修复伪元素背景图和负z-index丢失问题)
+        // 2. 截取真正的浏览器画面 (Native Screen Capture)
+        // 完美解决所有 CSS 伪元素、外部跨域图片、高斯模糊问题
         // ==========================================
-        $btn.html('<i class="fa-solid fa-camera fa-spin"></i> 正在截取聊天预览图...');
-        toast.info("正在抓取界面，请勿操作...");
-        
-        if (!window.html2canvas) {
-            await new Promise((res, rej) => {
-                const script = document.createElement('script');
-                // 【修复】改用 1.4.1 最新稳定版，对复杂 CSS 和外部 URL 支持更好
-                script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
-                script.onload = res;
-                script.onerror = rej;
-                document.head.appendChild(script);
-            });
-        }
+        $btn.html('<i class="fa-solid fa-camera fa-spin"></i> 请在弹窗中选择分享【当前标签页】...');
+        toast.info("请在弹出的授权窗口中，选择分享【当前标签页】进行截图", 5000);
 
-        // 隐藏多余面板
+        // 隐藏多余面板，保证截图干净
         const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
         $hiddenElements.hide(); 
-        
-        // 强制取消所有图片的懒加载，防止头像透明
-        $('img[loading="lazy"]').attr('loading', 'eager');
-        
-        // 【终极魔法：解决外部 URL 背景 + 负 z-index 丢失问题】
-        const tempStyle = document.createElement('style');
-        tempStyle.id = 'museum-screenshot-fix';
-        tempStyle.innerHTML = `
-            /* 1. 移除可能导致 html2canvas 崩溃的高斯模糊 */
-            .mes { backdrop-filter: none !important; }
+        await new Promise(r => setTimeout(r, 200)); 
+
+        let imgBlob;
+        try {
+            // 调用浏览器原生 API 捕获真实画面
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+                video: { displaySurface: "browser" }, // 推荐默认选中浏览器标签页
+                audio: false
+            });
+
+            // 将画面流连接到隐藏的 video 元素
+            const video = document.createElement('video');
+            video.srcObject = stream;
+            video.autoplay = true;
+
+            await new Promise((resolve, reject) => {
+                video.onloadedmetadata = resolve;
+                video.onerror = reject;
+            });
+
+            // 稍微等待几百毫秒，确保画面帧已渲染
+            await new Promise(r => setTimeout(r, 600));
+
+            // 将当前帧画入 Canvas
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // 截图完毕，立即停止屏幕共享，不留小绿点
+            stream.getTracks().forEach(track => track.stop());
+
+            // 转换为 PNG Blob
+            imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
             
-            /* 2. 修复 ::before/::after 负 z-index 丢失的核心代码 */
-            /* 强制给 .mes 加上 z-index: 0 建立局部层叠上下文，把伪元素“兜住” */
-            .mes { z-index: 0 !important; }
-            
-            /* 3. 确立明确的层级，确保背景图不会反而把文字遮挡住 */
-            .mes::before { z-index: -2 !important; }
-            .mes::after { z-index: -1 !important; }
-            
-            /* 4. 确保消息主体内容稳稳待在背景之上 */
-            .mes_block, .mesAvatarWrapper, .mes_media_wrapper, .mes_file_wrapper {
-                position: relative !important;
-                z-index: 2 !important;
-            }
-        `;
-        document.head.appendChild(tempStyle);
+            // 恢复界面显示
+            $hiddenElements.show(); 
+        } catch (err) {
+            // 用户取消了分享或出错，恢复界面并中断
+            $hiddenElements.show();
+            throw new Error("取消了截图或获取画面失败: " + err.message);
+        }
 
-        // 多给 800 毫秒时间，让浏览器重新排版并彻底加载外部图床(img.baidu.re)的图片
-        await new Promise(r => setTimeout(r, 800)); 
-
-        const canvas = await html2canvas(document.body, {
-            useCORS: true,           // 【必须开启】允许跨域拉取你放在百度/其他图床的链接图
-            backgroundColor: null,   // 保持底层大背景透明，不要用实色盖住底图
-            scale: window.devicePixelRatio || 1, 
-            logging: true            // 开启内部日志，如果还报错按 F12 就能看到原因
-        });
-
-        // 恢复所有被隐藏的面板和样式
-        $hiddenElements.show(); 
-        $('#museum-screenshot-fix').remove();
-
-        const imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
 
 
 
