@@ -896,50 +896,80 @@ async function importBeautifyDirectly(item, $card) {
 }
 
 
-// ====== 修改：一键抓取并上传主题功能 ======
+// ====== 新增：一键抓取并上传主题功能 (终极拦截版) ======
 async function handleAutoCaptureTheme() {
     if (!supabase || !session) {
         toast.error("请先在设置中连接并登录 Supabase");
         return;
     }
 
-    // 1. 获取主题名称
-    let uiName = $('#themes option:selected').text();
-    let themeName = uiName ? uiName.replace(/^\*\s*/, '').trim() : "未命名主题";
-
     const themeCategory = prompt("给主题打上标签 (空格隔开，直接点确定表示不加标签)：", "自用 主题");
-    if (themeCategory === null) return; // 用户点击取消
+    if (themeCategory === null) return; // 用户取消
 
     const $btn = $('#museum-auto-capture-theme');
     const originalText = $btn.html();
-    $btn.html('<i class="fa-solid fa-spinner fa-spin"></i> 正在抓取...').css('pointer-events', 'none');
-    toast.info("正在抓取纯净聊天界面，屏幕可能会闪烁一下...");
+    $btn.html('<i class="fa-solid fa-spinner fa-spin"></i> 正在生成官方主题文件...').css('pointer-events', 'none');
 
     try {
-        // 2. 【终极修复】不依赖 window.themes，直接读取网页当前生效的所有颜色！
-        // 这样 100% 绝对不会报错，而且导出的格式和官方完全一致！
-        const rs = getComputedStyle(document.documentElement);
-        const getVar = (name) => (rs.getPropertyValue(name) || "").trim();
+        // ==========================================
+        // 1. 拦截原生的“导出”按钮，获取 100% 原汁原味的 JSON 文件
+        // ==========================================
+        const captureNativeExport = () => new Promise((resolve, reject) => {
+            const originalCreateElement = document.createElement.bind(document);
+            let timeout;
 
-        const themeJsonObj = {
-            name: themeName, // 必须有 name 字段
-            main_text_color: getVar('--SmartThemeBodyColor') || "rgba(255,255,255,1)",
-            italics_text_color: getVar('--SmartThemeEmColor') || "rgba(255,255,255,1)",
-            underline_text_color: getVar('--SmartThemeUColor') || "rgba(255,255,255,1)",
-            quote_text_color: getVar('--SmartThemeQuoteColor') || "rgba(255,255,255,1)",
-            shadow_color: getVar('--SmartThemeShadowColor') || "rgba(0,0,0,1)",
-            chat_tint_color: getVar('--SmartThemeChatTintColor') || "rgba(0,0,0,0.5)",
-            blur_tint_color: getVar('--SmartThemeBlurTintColor') || "rgba(0,0,0,0.5)",
-            border_color: getVar('--SmartThemeBorderColor') || "rgba(255,255,255,0.2)",
-            user_mes_blur_tint_color: getVar('--SmartThemeUserMesBlurTintColor') || "rgba(0,0,0,0.5)",
-            bot_mes_blur_tint_color: getVar('--SmartThemeBotMesBlurTintColor') || "rgba(0,0,0,0.5)",
-            customCSS: $('#customCSS').val() || "" // 将自定义CSS一起打包进去
-        };
+            function cleanup() {
+                document.createElement = originalCreateElement;
+                clearTimeout(timeout);
+            }
 
-        const jsonString = JSON.stringify(themeJsonObj, null, 2);
-        const jsonBlob = new Blob([jsonString], { type: "application/json" });
+            // 临时劫持创建 a 标签的方法
+            document.createElement = function(tagName) {
+                const el = originalCreateElement(tagName);
+                if (tagName.toLowerCase() === 'a') {
+                    // 拦截 a 标签的下载点击行为
+                    el.click = function() {
+                        const href = this.href;
+                        const downloadName = this.download; // 获取官方定好的文件名
+                        cleanup();
+                        resolve({ href, downloadName });
+                    };
+                }
+                return el;
+            };
 
-        // 3. 加载 html2canvas
+            // 触发酒馆的官方导出按钮
+            const exportBtn = document.getElementById('ui_preset_export_button');
+            if (exportBtn) {
+                exportBtn.click();
+            } else {
+                cleanup();
+                reject(new Error("找不到酒馆的原生导出按钮"));
+            }
+
+            // 防卡死超时机制
+            timeout = setTimeout(() => {
+                cleanup();
+                reject(new Error("读取官方导出文件失败"));
+            }, 3000);
+        });
+
+        // 获取官方生成的下载链接和文件名
+        const { href, downloadName } = await captureNativeExport();
+        
+        // 将链接转换为真正的文件对象
+        const res = await fetch(href);
+        const jsonBlob = await res.blob();
+        
+        // 提取主题名字（去掉 .json 后缀）
+        let themeName = downloadName.replace(/\.json$/i, '');
+
+        // ==========================================
+        // 2. 截图当前聊天界面 (修复透明头像)
+        // ==========================================
+        $btn.html('<i class="fa-solid fa-camera fa-spin"></i> 正在截取聊天预览图...');
+        toast.info("正在抓取界面，屏幕可能会闪烁一下...");
+        
         if (!window.html2canvas) {
             await new Promise((res, rej) => {
                 const script = document.createElement('script');
@@ -950,40 +980,41 @@ async function handleAutoCaptureTheme() {
             });
         }
 
-        // 4. 隐藏多余面板
+        // 隐藏左右两侧和顶部的多余面板
         const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
         $hiddenElements.hide(); 
-        await new Promise(r => setTimeout(r, 150)); 
+        await new Promise(r => setTimeout(r, 200)); // 等待UI稳定
 
-        // 提取当前的背景底色，如果完全透明则给一个深色底，防止截图变透明
-        let bgColor = getVar('--SmartThemeBgColor');
-        if (!bgColor || bgColor === 'transparent' || bgColor === 'rgba(0, 0, 0, 0)') {
-            bgColor = '#131516'; // 兜底深灰色
+        // 强制获取真实背景色，防止头像和消息框变成透明
+        let bgColor = window.getComputedStyle(document.body).backgroundColor;
+        if (!bgColor || bgColor === 'rgba(0, 0, 0, 0)' || bgColor === 'transparent') {
+            bgColor = '#242425'; // 酒馆默认深色底
         }
 
         const canvas = await html2canvas(document.body, {
             useCORS: true,
             allowTaint: true,
-            backgroundColor: bgColor, // 填补背景，防止消息和头像变透明
-            scale: 1, // 强行将清晰度锁为1，极大降低 iOS 闪退率
+            backgroundColor: bgColor, // 垫上底色
+            scale: 1, // 防 iOS 爆内存
             logging: false
         });
 
-        // 恢复 UI
-        $hiddenElements.show();
+        $hiddenElements.show(); // 恢复UI
 
         const imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
 
-        // 5. 上传
+        // ==========================================
+        // 3. 上传到 Supabase 存储桶
+        // ==========================================
+        $btn.html('<i class="fa-solid fa-cloud-arrow-up fa-spin"></i> 正在上传至云端...');
+
         const uid = session.user.id;
         const timestamp = Date.now();
         const rand = Math.random().toString(36).substr(2, 5);
         
-        // 上传到云端的文件名必须是纯英文/数字，避免 Supabase 报错
+        // 云端文件名强制用英文，防止报错
         const imgName = `beautify_prev_${timestamp}_${rand}.png`;
         const jsonName = `beautify_file_${timestamp}_${rand}.json`;
-
-        $btn.html('<i class="fa-solid fa-cloud-arrow-up"></i> 正在上传至云端...');
 
         const { error: imgErr } = await supabase.storage.from('uploads').upload(imgName, imgBlob);
         if (imgErr) throw imgErr;
@@ -993,13 +1024,15 @@ async function handleAutoCaptureTheme() {
         if (jsonErr) throw jsonErr;
         const jsonUrl = supabase.storage.from('uploads').getPublicUrl(jsonName).data.publicUrl;
 
-        // 6. 入库
+        // ==========================================
+        // 4. 写入数据库
+        // ==========================================
         const contentObj = {
-            title: themeName, // 数据库显示的标题依然用原汁原味的中文
+            title: themeName, // 使用官方导出的准确名称
             variations: [
                 {
                     name: "主配色",
-                    color: themeJsonObj.quote_text_color || "#ffffff",
+                    color: "#ffffff", 
                     preview: imgUrl,
                     file: jsonUrl
                 }
@@ -1019,6 +1052,7 @@ async function handleAutoCaptureTheme() {
 
         toast.success(`🎉 主题 "${themeName}" 已成功上传！`);
         
+        // 自动跳转到列表
         currentFilter = 'beautify';
         $('.museum-filter-btn').removeClass('active');
         $(`[data-filter='beautify']`).addClass('active');
@@ -1026,13 +1060,14 @@ async function handleAutoCaptureTheme() {
 
     } catch (e) {
         console.error("[Museum Capture Error]", e);
-        toast.error("上传失败: " + e.message);
-        $('.drawer, #top-bar, #toast-container, #movingDivs').show(); // 确保出错了也会恢复UI
+        toast.error("抓取/上传失败: " + e.message);
+        $('.drawer, #top-bar, #toast-container, #movingDivs').show();
     } finally {
         $btn.html(originalText).css('pointer-events', 'auto');
     }
 }
 // ====== 修改结束 ======
+
 
 
 
