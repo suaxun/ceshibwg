@@ -896,7 +896,7 @@ async function importBeautifyDirectly(item, $card) {
 }
 
 
-// ====== 新增：一键抓取并上传主题功能 (终极拦截版) ======
+// ====== 新增：一键抓取并上传主题功能 (终极拦截防销毁版) ======
 async function handleAutoCaptureTheme() {
     if (!supabase || !session) {
         toast.error("请先在设置中连接并登录 Supabase");
@@ -904,7 +904,7 @@ async function handleAutoCaptureTheme() {
     }
 
     const themeCategory = prompt("给主题打上标签 (空格隔开，直接点确定表示不加标签)：", "自用 主题");
-    if (themeCategory === null) return; // 用户取消
+    if (themeCategory === null) return; 
 
     const $btn = $('#museum-auto-capture-theme');
     const originalText = $btn.html();
@@ -912,33 +912,50 @@ async function handleAutoCaptureTheme() {
 
     try {
         // ==========================================
-        // 1. 拦截原生的“导出”按钮，获取 100% 原汁原味的 JSON 文件
+        // 1. 终极拦截：同时拦截 <a> 标签和 URL.revokeObjectURL
         // ==========================================
-        const captureNativeExport = () => new Promise((resolve, reject) => {
+        const { blob: jsonBlob, downloadName: fileName } = await new Promise((resolve, reject) => {
             const originalCreateElement = document.createElement.bind(document);
+            const originalRevoke = URL.revokeObjectURL.bind(URL);
+            
             let timeout;
-
+            
+            // 清理劫持，恢复原状
             function cleanup() {
                 document.createElement = originalCreateElement;
+                URL.revokeObjectURL = originalRevoke;
                 clearTimeout(timeout);
             }
 
-            // 临时劫持创建 a 标签的方法
+            // 【关键修复】拦截酒馆的“自毁代码”！让文件多活10秒钟供我们读取
+            URL.revokeObjectURL = function(url) {
+                setTimeout(() => originalRevoke(url), 10000); 
+            };
+
+            // 拦截 <a> 标签的下载动作
             document.createElement = function(tagName) {
                 const el = originalCreateElement(tagName);
                 if (tagName.toLowerCase() === 'a') {
-                    // 拦截 a 标签的下载点击行为
-                    el.click = function() {
+                    // 覆盖原生 click 行为，只拦截链接，不真的下载到用户电脑上
+                    el.click = async function() {
                         const href = this.href;
-                        const downloadName = this.download; // 获取官方定好的文件名
-                        cleanup();
-                        resolve({ href, downloadName });
+                        const downloadName = this.download;
+                        cleanup(); // 拿到东西就立刻恢复原状
+                        
+                        try {
+                            // 因为我们拦截了销毁，这里 fetch 绝对不会再报错了
+                            const res = await fetch(href);
+                            const blob = await res.blob();
+                            resolve({ blob, downloadName });
+                        } catch (err) {
+                            reject(err);
+                        }
                     };
                 }
                 return el;
             };
 
-            // 触发酒馆的官方导出按钮
+            // 悄悄触发酒馆官方的导出按钮
             const exportBtn = document.getElementById('ui_preset_export_button');
             if (exportBtn) {
                 exportBtn.click();
@@ -947,22 +964,15 @@ async function handleAutoCaptureTheme() {
                 reject(new Error("找不到酒馆的原生导出按钮"));
             }
 
-            // 防卡死超时机制
+            // 超时保护
             timeout = setTimeout(() => {
                 cleanup();
-                reject(new Error("读取官方导出文件失败"));
+                reject(new Error("读取官方导出文件超时"));
             }, 3000);
         });
 
-        // 获取官方生成的下载链接和文件名
-        const { href, downloadName } = await captureNativeExport();
-        
-        // 将链接转换为真正的文件对象
-        const res = await fetch(href);
-        const jsonBlob = await res.blob();
-        
         // 提取主题名字（去掉 .json 后缀）
-        let themeName = downloadName.replace(/\.json$/i, '');
+        let themeName = fileName.replace(/\.json$/i, '');
 
         // ==========================================
         // 2. 截图当前聊天界面 (修复透明头像)
@@ -980,26 +990,26 @@ async function handleAutoCaptureTheme() {
             });
         }
 
-        // 隐藏左右两侧和顶部的多余面板
+        // 隐藏多余面板
         const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
         $hiddenElements.hide(); 
-        await new Promise(r => setTimeout(r, 200)); // 等待UI稳定
+        await new Promise(r => setTimeout(r, 200)); 
 
         // 强制获取真实背景色，防止头像和消息框变成透明
         let bgColor = window.getComputedStyle(document.body).backgroundColor;
         if (!bgColor || bgColor === 'rgba(0, 0, 0, 0)' || bgColor === 'transparent') {
-            bgColor = '#242425'; // 酒馆默认深色底
+            bgColor = '#242425'; 
         }
 
         const canvas = await html2canvas(document.body, {
             useCORS: true,
             allowTaint: true,
-            backgroundColor: bgColor, // 垫上底色
-            scale: 1, // 防 iOS 爆内存
+            backgroundColor: bgColor,
+            scale: 1, 
             logging: false
         });
 
-        $hiddenElements.show(); // 恢复UI
+        $hiddenElements.show(); 
 
         const imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
 
@@ -1012,7 +1022,7 @@ async function handleAutoCaptureTheme() {
         const timestamp = Date.now();
         const rand = Math.random().toString(36).substr(2, 5);
         
-        // 云端文件名强制用英文，防止报错
+        // 这里的云端地址必须是纯英文，防止报错
         const imgName = `beautify_prev_${timestamp}_${rand}.png`;
         const jsonName = `beautify_file_${timestamp}_${rand}.json`;
 
@@ -1028,7 +1038,7 @@ async function handleAutoCaptureTheme() {
         // 4. 写入数据库
         // ==========================================
         const contentObj = {
-            title: themeName, // 使用官方导出的准确名称
+            title: themeName, // 标题保持完美的中文名
             variations: [
                 {
                     name: "主配色",
@@ -1052,7 +1062,6 @@ async function handleAutoCaptureTheme() {
 
         toast.success(`🎉 主题 "${themeName}" 已成功上传！`);
         
-        // 自动跳转到列表
         currentFilter = 'beautify';
         $('.museum-filter-btn').removeClass('active');
         $(`[data-filter='beautify']`).addClass('active');
@@ -1067,6 +1076,7 @@ async function handleAutoCaptureTheme() {
     }
 }
 // ====== 修改结束 ======
+
 
 
 
