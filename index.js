@@ -974,8 +974,8 @@ async function handleAutoCaptureTheme() {
         // 提取主题名字（去掉 .json 后缀）
         let themeName = fileName.replace(/\.json$/i, '');
 
-        // ==========================================
-        // 2. 截图当前聊天界面 (修复透明头像)
+           // ==========================================
+        // 2. 截图当前聊天界面 (修复背景图丢失、头像透明问题)
         // ==========================================
         $btn.html('<i class="fa-solid fa-camera fa-spin"></i> 正在截取聊天预览图...');
         toast.info("正在抓取界面，屏幕可能会闪烁一下...");
@@ -993,25 +993,37 @@ async function handleAutoCaptureTheme() {
         // 隐藏多余面板
         const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
         $hiddenElements.hide(); 
-        await new Promise(r => setTimeout(r, 200)); 
+        
+        // 【关键修复1】强制取消所有图片的懒加载，防止截出透明头像
+        $('img[loading="lazy"]').attr('loading', 'eager');
+        
+        // 【关键修复2】html2canvas 不支持高斯模糊(backdrop-filter)。
+        // 为了防止半透明消息框在截图里彻底看不清，稍微给点补救样式，截图完删掉
+        const tempStyle = document.createElement('style');
+        tempStyle.id = 'museum-screenshot-fix';
+        tempStyle.innerHTML = `.mes { backdrop-filter: none !important; }`;
+        document.head.appendChild(tempStyle);
 
-        // 强制获取真实背景色，防止头像和消息框变成透明
-        let bgColor = window.getComputedStyle(document.body).backgroundColor;
-        if (!bgColor || bgColor === 'rgba(0, 0, 0, 0)' || bgColor === 'transparent') {
-            bgColor = '#242425'; 
-        }
+        // 多等一会儿，确保图片加载完毕且界面重绘完成
+        await new Promise(r => setTimeout(r, 500)); 
 
+        // 【关键修复3】配置 html2canvas
         const canvas = await html2canvas(document.body, {
-            useCORS: true,
-            allowTaint: true,
-            backgroundColor: bgColor,
-            scale: 1, 
+            useCORS: true,           // 必须开启：允许跨域加载外部 URL 背景图
+            backgroundColor: null,   // 必须为null：保持透明，让底层的 #bg1 背景图透出来！不要强塞颜色！
+            scale: window.devicePixelRatio || 1, // 保证清晰度
+            windowWidth: window.innerWidth,
+            windowHeight: window.innerHeight,
             logging: false
+            // 绝对不能加 allowTaint: true，否则会导致带外部链接的画布无法输出图片
         });
 
+        // 恢复界面
         $hiddenElements.show(); 
+        $('#museum-screenshot-fix').remove(); // 移除补救样式
 
         const imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+
 
         // ==========================================
         // 3. 上传到 Supabase 存储桶
