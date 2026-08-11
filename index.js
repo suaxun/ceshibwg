@@ -860,7 +860,8 @@ async function importBeautifyDirectly(item, $card) {
         }
 
         const themeUrl = selectedVar.file;
-        const themeName = selectedVar.name || json.title || "自定义主题";
+        // 【确保导入时恢复中文名字】
+        const themeName = json.title || selectedVar.name || "自定义主题";
 
         btn.html('<i class="fa-solid fa-spinner fa-spin"></i>');
 
@@ -868,7 +869,9 @@ async function importBeautifyDirectly(item, $card) {
         if (!response.ok) throw new Error(`网络请求失败`);
         
         const blob = await response.blob();
-        const fileName = `${themeName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_')}.json`;
+        
+        // 允许中文，仅过滤操作系统不允许的符号
+        const fileName = `${themeName.replace(/[\\/:*?"<>|]/g, '_')}.json`;
         const file = new File([blob], fileName, { type: "application/json" });
 
         const stThemeInput = document.getElementById('ui_preset_import_file');
@@ -891,145 +894,7 @@ async function importBeautifyDirectly(item, $card) {
     }
     setTimeout(() => btn.html(originalText), 2000);
 }
-// ====== 修改：一键抓取并上传主题功能 ======
-async function handleAutoCaptureTheme() {
-    if (!supabase || !session) {
-        toast.error("请先在设置中连接并登录 Supabase");
-        return;
-    }
 
-    // 1. 获取酒馆里当前选中的主题名字
-    let themeName = $('#themes option:selected').text();
-    if (themeName) {
-        themeName = themeName.replace(/^\*\s*/, '').trim(); 
-    } else {
-        themeName = "未命名主题";
-    }
-
-    const themeCategory = prompt("给主题打上标签 (空格隔开，直接点确定表示不加标签)：", "自用 主题");
-    if (themeCategory === null) return;
-
-    const $btn = $('#museum-auto-capture-theme');
-    const originalText = $btn.html();
-    $btn.html('<i class="fa-solid fa-spinner fa-spin"></i> 正在抓取...').css('pointer-events', 'none');
-    toast.info("正在抓取纯净聊天界面，屏幕可能会闪烁一下...");
-
-    try {
-        // 2. 【完美修复】读取酒馆现存的 10 个颜色，完全复刻酒馆官方 Export JSON 格式
-        const rs = getComputedStyle(document.documentElement);
-        const getVar = (name) => (rs.getPropertyValue(name) || "").trim();
-
-        const themeJsonObj = {
-            main_text_color: getVar('--SmartThemeBodyColor') || "rgba(255,255,255,1)",
-            italics_text_color: getVar('--SmartThemeEmColor') || "rgba(255,255,255,1)",
-            underline_text_color: getVar('--SmartThemeUColor') || "rgba(255,255,255,1)",
-            quote_text_color: getVar('--SmartThemeQuoteColor') || "rgba(255,255,255,1)",
-            shadow_color: getVar('--SmartThemeShadowColor') || "rgba(0,0,0,1)",
-            chat_tint_color: getVar('--SmartThemeChatTintColor') || "rgba(0,0,0,0.5)",
-            blur_tint_color: getVar('--SmartThemeBlurTintColor') || "rgba(0,0,0,0.5)",
-            border_color: getVar('--SmartThemeBorderColor') || "rgba(255,255,255,0.2)",
-            user_mes_blur_tint_color: getVar('--SmartThemeUserMesBlurTintColor') || "rgba(0,0,0,0.5)",
-            bot_mes_blur_tint_color: getVar('--SmartThemeBotMesBlurTintColor') || "rgba(0,0,0,0.5)"
-        };
-
-        const jsonString = JSON.stringify(themeJsonObj, null, 2);
-        const jsonBlob = new Blob([jsonString], { type: "application/json" });
-
-        // 3. 加载 html2canvas
-        if (!window.html2canvas) {
-            await new Promise((res, rej) => {
-                const script = document.createElement('script');
-                script.src = "https://html2canvas.hertzen.com/dist/html2canvas.min.js";
-                script.onload = res;
-                script.onerror = rej;
-                document.head.appendChild(script);
-            });
-        }
-
-        // 4. 隐藏多余面板
-        const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
-        $hiddenElements.hide(); 
-        await new Promise(r => setTimeout(r, 150)); 
-
-        // 【完美修复】提取当前的背景底色，如果完全透明则给一个深色底，防止截图崩坏
-        let bgColor = getVar('--SmartThemeBgColor');
-        if (!bgColor || bgColor === 'transparent' || bgColor === 'rgba(0, 0, 0, 0)') {
-            bgColor = '#131516'; // 兜底深灰色
-        }
-
-        const canvas = await html2canvas(document.body, {
-            useCORS: true,
-            allowTaint: true,
-            backgroundColor: bgColor, // 填补背景，防止消息和头像变透明
-            scale: 1, // 强行将清晰度锁为1，极大降低 iOS 闪退率
-            logging: false
-        });
-
-        // 恢复 UI
-        $hiddenElements.show();
-
-        const imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-
-        // 5. 上传
-        const uid = session.user.id;
-        const timestamp = Date.now();
-        const rand = Math.random().toString(36).substr(2, 5);
-        
-        const imgName = `beautify_prev_${timestamp}_${rand}.png`;
-        // 文件名和当前酒馆里的名字完全一致，并过滤特殊字符
-        const safeThemeName = themeName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5-_]/g, '_');
-        const jsonName = `${safeThemeName}_${timestamp}.json`;
-
-        $btn.html('<i class="fa-solid fa-cloud-arrow-up"></i> 正在上传至云端...');
-
-        const { error: imgErr } = await supabase.storage.from('uploads').upload(imgName, imgBlob);
-        if (imgErr) throw imgErr;
-        const imgUrl = supabase.storage.from('uploads').getPublicUrl(imgName).data.publicUrl;
-
-        const { error: jsonErr } = await supabase.storage.from('uploads').upload(jsonName, jsonBlob);
-        if (jsonErr) throw jsonErr;
-        const jsonUrl = supabase.storage.from('uploads').getPublicUrl(jsonName).data.publicUrl;
-
-        // 6. 入库
-        const contentObj = {
-            title: themeName,
-            variations: [
-                {
-                    name: "主配色",
-                    color: themeJsonObj.quote_text_color,
-                    preview: imgUrl,
-                    file: jsonUrl
-                }
-            ]
-        };
-
-        const payload = {
-            type: 'beautify',
-            category: themeCategory ? themeCategory.trim() : "快捷抓取",
-            content: JSON.stringify(contentObj),
-            file_url: imgUrl, 
-            user_id: uid
-        };
-
-        const { error: dbErr } = await supabase.from('fragments').insert(payload);
-        if (dbErr) throw dbErr;
-
-        toast.success(`🎉 主题 "${themeName}" 已成功上传！`);
-        
-        currentFilter = 'beautify';
-        $('.museum-filter-btn').removeClass('active');
-        $(`[data-filter='beautify']`).addClass('active');
-        refreshGallery();
-
-    } catch (e) {
-        console.error("[Museum Capture Error]", e);
-        toast.error("上传失败: " + e.message);
-        $('.drawer, #top-bar, #toast-container, #movingDivs').show(); // 确保出错了也会恢复UI
-    } finally {
-        $btn.html(originalText).css('pointer-events', 'auto');
-    }
-}
-// ====== 修改结束 ======
 
 
 
