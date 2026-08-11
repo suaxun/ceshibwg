@@ -973,11 +973,11 @@ async function handleAutoCaptureTheme() {
 
         // 提取主题名字（去掉 .json 后缀）
         let themeName = fileName.replace(/\.json$/i, '');
-         // ==========================================
-        // 2. 截图当前聊天界面 (CORS 代理方案，完美还原图床背景图)
+        // ==========================================
+        // 2. 截图当前聊天界面 (使用专门的图片 CDN 代理洗白跨域限制)
         // ==========================================
         $btn.html('<i class="fa-solid fa-camera fa-spin"></i> 正在截取聊天预览图...');
-        toast.info("正在抓取界面，请稍候...");
+        toast.info("正在抓取界面，请稍候...", 2000);
         
         if (!window.html2canvas) {
             await new Promise((res, rej) => {
@@ -989,73 +989,71 @@ async function handleAutoCaptureTheme() {
             });
         }
 
-        // 隐藏多余的 UI 面板
         const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
         $hiddenElements.hide(); 
         
-        // 强制取消图片的懒加载
+        // 强制取消图片懒加载
         $('img[loading="lazy"]').attr('loading', 'eager');
         
+        // 给点时间让界面重绘
         await new Promise(r => setTimeout(r, 500)); 
 
         let imgBlob;
         try {
             const canvas = await html2canvas(document.body, {
-                useCORS: true,
-                allowTaint: false,
-                backgroundColor: null, // 保持透明底色
+                useCORS: true,           // 开启跨域
+                allowTaint: false,       // 拒绝污染画布，否则无法导出
+                backgroundColor: null,   // 保持背景透明
                 scale: window.devicePixelRatio || 1,
                 logging: false,
-                // 【核心黑科技】：在后台克隆的文档里，给所有外链图片套上代理
                 onclone: (clonedDoc) => {
-                    // a) 在克隆文档里隐藏UI，防止漏网之鱼
+                    // 1. 隐藏多余 UI
                     clonedDoc.querySelectorAll('.drawer, #top-bar, #toast-container, #movingDivs').forEach(el => {
                         el.style.setProperty('display', 'none', 'important');
                     });
 
-                    // b) 洗白所有 <style> 标签中的外链图片 (针对你的 ::before 和 ::after)
-                    const styles = clonedDoc.querySelectorAll('style');
-                    styles.forEach(style => {
-                        if (style.innerHTML && style.innerHTML.includes('url(')) {
-                            style.innerHTML = style.innerHTML.replace(/url\(['"]?(https?:\/\/[^'")]+)['"]?\)/gi, (match, url) => {
-                                // 已经是代理或本地的就跳过
-                                if (url.includes('corsproxy.io') || url.includes(location.host)) return match;
-                                return `url('https://corsproxy.io/?${encodeURIComponent(url)}')`;
-                            });
-                        }
-                    });
-
-                    // c) 洗白所有行内样式的图片
-                    clonedDoc.querySelectorAll('*').forEach(el => {
-                        if (el.style && el.style.backgroundImage && el.style.backgroundImage.includes('url(')) {
-                            el.style.backgroundImage = el.style.backgroundImage.replace(/url\(['"]?(https?:\/\/[^'")]+)['"]?\)/gi, (match, url) => {
-                                if (url.includes('corsproxy.io') || url.includes(location.host)) return match;
-                                return `url('https://corsproxy.io/?${encodeURIComponent(url)}')`;
-                            });
-                        }
-                    });
-
-                    // d) 洗白所有 <img> 标签的外链图片
-                    clonedDoc.querySelectorAll('img').forEach(img => {
-                        if (img.src && img.src.startsWith('http') && !img.src.includes(location.host) && !img.src.includes('corsproxy.io')) {
-                            img.src = `https://corsproxy.io/?${encodeURIComponent(img.src)}`;
-                            img.crossOrigin = 'anonymous';
-                        }
-                    });
-
-                    // e) 移除高斯模糊 (截图引擎不支持模糊，会导致整块白屏或崩溃)
+                    // 2. 移除所有高斯模糊 (html2canvas不支持模糊，遇到模糊必透明或报错)
                     const fixStyle = clonedDoc.createElement('style');
                     fixStyle.innerHTML = `* { backdrop-filter: none !important; }`;
                     clonedDoc.head.appendChild(fixStyle);
+
+                    // 3. 【黑科技】强行洗白 <style> 里的图床链接
+                    // 使用 wsrv.nl 这个强大的图片代理CDN，它会自动处理跨域头并返回图片
+                    const styles = clonedDoc.querySelectorAll('style');
+                    styles.forEach(style => {
+                        if (style.innerHTML && style.innerHTML.includes('url(')) {
+                            style.innerHTML = style.innerHTML.replace(/url\(['"]?(https?:\/\/[^'")]+)['"]?\)/gi, (match, imgUrl) => {
+                                // 已经是本地路径或已被代理，不处理
+                                if (imgUrl.includes(location.host) || imgUrl.includes('wsrv.nl')) return match;
+                                // 替换为图片代理
+                                return `url('https://wsrv.nl/?url=${encodeURIComponent(imgUrl)}')`;
+                            });
+                        }
+                    });
+
+                    // 4. 洗白所有行内样式里的图床链接
+                    clonedDoc.querySelectorAll('*').forEach(el => {
+                        if (el.style && el.style.backgroundImage && el.style.backgroundImage.includes('url(')) {
+                            el.style.backgroundImage = el.style.backgroundImage.replace(/url\(['"]?(https?:\/\/[^'")]+)['"]?\)/gi, (match, imgUrl) => {
+                                if (imgUrl.includes(location.host) || imgUrl.includes('wsrv.nl')) return match;
+                                return `url('https://wsrv.nl/?url=${encodeURIComponent(imgUrl)}')`;
+                            });
+                        }
+                    });
                 }
             });
 
             imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+            
+            // 如果截出来是全透明(小于10KB)，说明安全限制太死，抛出错误
+            if (imgBlob.size < 10000) {
+                throw new Error("截取到了无效的透明图片。");
+            }
+            
         } catch (err) {
             console.error(err);
-            throw new Error("画面截取失败: " + err.message);
+            throw new Error("截图失败: " + err.message + " \n(建议将CSS中的图床图片存到酒馆本地 public/user/images 中)");
         } finally {
-            // 不管成功失败，最后一定要恢复界面 UI
             $hiddenElements.show(); 
         }
 
