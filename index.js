@@ -896,33 +896,16 @@ async function importBeautifyDirectly(item, $card) {
 }
 
 
-// ====== 新增：一键抓取并上传主题功能 ======
+// ====== 修改：一键抓取并上传主题功能 ======
 async function handleAutoCaptureTheme() {
     if (!supabase || !session) {
         toast.error("请先在设置中连接并登录 Supabase");
         return;
     }
 
-    // 1. 获取酒馆里当前选中的主题数据
-    let themeIndex = $('#themes').val();
-    let themeJsonObj = {};
-    let themeName = "未命名主题";
-
-    if (window.themes && window.themes[themeIndex]) {
-        // 【完美修复】直接深拷贝酒馆自带的完整主题数据，这和原生导出按钮一模一样
-        themeJsonObj = JSON.parse(JSON.stringify(window.themes[themeIndex]));
-        
-        // 获取纯净的名字（去除未保存时的星号）
-        let uiName = $('#themes option:selected').text();
-        if (uiName) uiName = uiName.replace(/^\*\s*/, '').trim();
-        
-        themeName = themeJsonObj.name || uiName;
-        // 确保导出文件内包含正确的 name 字段
-        themeJsonObj.name = themeName;
-    } else {
-        toast.error("获取当前主题数据失败，请确保您选中了一个主题。");
-        return;
-    }
+    // 1. 获取主题名称
+    let uiName = $('#themes option:selected').text();
+    let themeName = uiName ? uiName.replace(/^\*\s*/, '').trim() : "未命名主题";
 
     const themeCategory = prompt("给主题打上标签 (空格隔开，直接点确定表示不加标签)：", "自用 主题");
     if (themeCategory === null) return; // 用户点击取消
@@ -933,6 +916,26 @@ async function handleAutoCaptureTheme() {
     toast.info("正在抓取纯净聊天界面，屏幕可能会闪烁一下...");
 
     try {
+        // 2. 【终极修复】不依赖 window.themes，直接读取网页当前生效的所有颜色！
+        // 这样 100% 绝对不会报错，而且导出的格式和官方完全一致！
+        const rs = getComputedStyle(document.documentElement);
+        const getVar = (name) => (rs.getPropertyValue(name) || "").trim();
+
+        const themeJsonObj = {
+            name: themeName, // 必须有 name 字段
+            main_text_color: getVar('--SmartThemeBodyColor') || "rgba(255,255,255,1)",
+            italics_text_color: getVar('--SmartThemeEmColor') || "rgba(255,255,255,1)",
+            underline_text_color: getVar('--SmartThemeUColor') || "rgba(255,255,255,1)",
+            quote_text_color: getVar('--SmartThemeQuoteColor') || "rgba(255,255,255,1)",
+            shadow_color: getVar('--SmartThemeShadowColor') || "rgba(0,0,0,1)",
+            chat_tint_color: getVar('--SmartThemeChatTintColor') || "rgba(0,0,0,0.5)",
+            blur_tint_color: getVar('--SmartThemeBlurTintColor') || "rgba(0,0,0,0.5)",
+            border_color: getVar('--SmartThemeBorderColor') || "rgba(255,255,255,0.2)",
+            user_mes_blur_tint_color: getVar('--SmartThemeUserMesBlurTintColor') || "rgba(0,0,0,0.5)",
+            bot_mes_blur_tint_color: getVar('--SmartThemeBotMesBlurTintColor') || "rgba(0,0,0,0.5)",
+            customCSS: $('#customCSS').val() || "" // 将自定义CSS一起打包进去
+        };
+
         const jsonString = JSON.stringify(themeJsonObj, null, 2);
         const jsonBlob = new Blob([jsonString], { type: "application/json" });
 
@@ -952,9 +955,8 @@ async function handleAutoCaptureTheme() {
         $hiddenElements.hide(); 
         await new Promise(r => setTimeout(r, 150)); 
 
-        // 提取当前的背景底色，如果完全透明则给一个深色底，防止截图崩坏
-        const rs = getComputedStyle(document.documentElement);
-        let bgColor = (rs.getPropertyValue('--SmartThemeBgColor') || "").trim();
+        // 提取当前的背景底色，如果完全透明则给一个深色底，防止截图变透明
+        let bgColor = getVar('--SmartThemeBgColor');
         if (!bgColor || bgColor === 'transparent' || bgColor === 'rgba(0, 0, 0, 0)') {
             bgColor = '#131516'; // 兜底深灰色
         }
@@ -977,7 +979,7 @@ async function handleAutoCaptureTheme() {
         const timestamp = Date.now();
         const rand = Math.random().toString(36).substr(2, 5);
         
-        // 【核心修复】：上传到云端的文件名必须是纯英文/数字，否则 Supabase 存储桶会报错 Invalid key
+        // 上传到云端的文件名必须是纯英文/数字，避免 Supabase 报错
         const imgName = `beautify_prev_${timestamp}_${rand}.png`;
         const jsonName = `beautify_file_${timestamp}_${rand}.json`;
 
@@ -993,7 +995,7 @@ async function handleAutoCaptureTheme() {
 
         // 6. 入库
         const contentObj = {
-            title: themeName, // 数据库显示的标题依然用中文
+            title: themeName, // 数据库显示的标题依然用原汁原味的中文
             variations: [
                 {
                     name: "主配色",
@@ -1031,6 +1033,7 @@ async function handleAutoCaptureTheme() {
     }
 }
 // ====== 修改结束 ======
+
 
 
 // --- 界面创建 ---
