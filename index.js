@@ -891,23 +891,29 @@ async function importBeautifyDirectly(item, $card) {
     }
     setTimeout(() => btn.html(originalText), 2000);
 }
-// ====== 新增：一键抓取并上传主题功能 ======
+// ====== 修改：一键抓取并上传主题功能 ======
 async function handleAutoCaptureTheme() {
     if (!supabase || !session) {
         toast.error("请先在设置中连接并登录 Supabase");
         return;
     }
 
-    // 1. 【核心修改】自动获取酒馆里当前选中的主题名字
-    let themeName = $('#themes option:selected').text();
-    // 移除名字里可能自带的 "* " 星号（如果主题未保存，酒馆会加上星号）
-    if (themeName) {
-        themeName = themeName.replace(/^\*\s*/, '').trim(); 
+    // 1. 【完美修复】直接从酒馆全局变量 window.themes 获取完美的主题数据
+    let themeIndex = $('#themes').val();
+    let themeJsonObj = {};
+    let themeName = "未命名主题";
+
+    if (window.themes && window.themes[themeIndex]) {
+        // 深拷贝酒馆自带的完整主题数据
+        themeJsonObj = JSON.parse(JSON.stringify(window.themes[themeIndex]));
+        themeName = themeJsonObj.name;
     } else {
-        themeName = "未命名主题";
+        toast.error("获取当前主题数据失败，请确保您选中了一个主题。");
+        return;
     }
 
     const themeCategory = prompt("给主题打上标签 (空格隔开，直接点确定表示不加标签)：", "自用 主题");
+    if (themeCategory === null) return; // 用户点击了取消
 
     const $btn = $('#museum-auto-capture-theme');
     const originalText = $btn.html();
@@ -915,27 +921,6 @@ async function handleAutoCaptureTheme() {
     toast.info("正在抓取纯净聊天界面，屏幕可能会闪烁一下，请稍候...");
 
     try {
-        // 2. 【核心修改】获取全局颜色 和 真正的 Custom CSS
-        const rs = getComputedStyle(document.documentElement);
-        const getVar = (name) => (rs.getPropertyValue(name) || "").trim();
-
-        // 构造酒馆标准的完全体 Theme JSON 格式
-        const themeJsonObj = {
-            name: themeName, // 【核心修复：酒馆导入时必须需要这个 name 字段】
-            main_text_color: getVar('--SmartThemeBodyColor') || "rgba(255,255,255,1)",
-            italics_text_color: getVar('--SmartThemeEmColor') || "rgba(255,255,255,1)",
-            underline_text_color: getVar('--SmartThemeUColor') || "rgba(255,255,255,1)",
-            quote_text_color: getVar('--SmartThemeQuoteColor') || "rgba(255,255,255,1)",
-            shadow_color: getVar('--SmartThemeShadowColor') || "rgba(0,0,0,1)",
-            chat_tint_color: getVar('--SmartThemeChatTintColor') || "rgba(0,0,0,0.5)",
-            blur_tint_color: getVar('--SmartThemeBlurTintColor') || "rgba(0,0,0,0.5)",
-            border_color: getVar('--SmartThemeBorderColor') || "rgba(255,255,255,0.2)",
-            user_mes_blur_tint_color: getVar('--SmartThemeUserMesBlurTintColor') || "rgba(0,0,0,0.5)",
-            bot_mes_blur_tint_color: getVar('--SmartThemeBotMesBlurTintColor') || "rgba(0,0,0,0.5)",
-            // 读取酒馆界面的 Custom CSS 文本框
-            customCSS: $('#customCSS').val() || "" 
-        };
-
         const jsonString = JSON.stringify(themeJsonObj, null, 2);
         const jsonBlob = new Blob([jsonString], { type: "application/json" });
 
@@ -956,10 +941,15 @@ async function handleAutoCaptureTheme() {
 
         await new Promise(r => setTimeout(r, 150)); // 等待浏览器重绘
 
+        // 【完美修复】解决头像透明以及 iOS 内存爆掉的问题
         const canvas = await html2canvas(document.body, {
             useCORS: true,
             allowTaint: true,
-            backgroundColor: null // 允许透明背景
+            // 获取当前 body 的真实背景色，防止头像变透明
+            backgroundColor: window.getComputedStyle(document.body).backgroundColor || '#131516',
+            // 限制截图精度(防 iOS 崩溃)，Retina 屏幕动辄 3 倍分辨率极易爆内存，强行锁为 1
+            scale: 1, 
+            logging: false
         });
 
         // 立刻恢复界面
@@ -987,11 +977,11 @@ async function handleAutoCaptureTheme() {
 
         // 6. 写入数据库条目
         const contentObj = {
-            title: themeName, // 使用提取到的真实主题名字
+            title: themeName, // 使用最真实的名称
             variations: [
                 {
                     name: "主配色",
-                    color: themeJsonObj.quote_text_color, // 用强调色装饰小圆点
+                    color: themeJsonObj.quote_text_color || "#ffffff",
                     preview: imgUrl,
                     file: jsonUrl
                 }
@@ -1002,7 +992,7 @@ async function handleAutoCaptureTheme() {
             type: 'beautify',
             category: themeCategory ? themeCategory.trim() : "快捷抓取",
             content: JSON.stringify(contentObj),
-            file_url: imgUrl, // 默认封面
+            file_url: imgUrl, 
             user_id: uid
         };
 
@@ -1020,11 +1010,13 @@ async function handleAutoCaptureTheme() {
     } catch (e) {
         console.error("[Museum Capture Error]", e);
         toast.error("上传失败: " + e.message);
+        // 确保界面恢复
+        $('.drawer, #top-bar, #toast-container, #movingDivs').show();
     } finally {
         $btn.html(originalText).css('pointer-events', 'auto');
     }
 }
-// ====== 新增结束 ======
+
 
 
 
@@ -1083,9 +1075,7 @@ function createSettingsHtml() {
 }
 
 
-
 // --- 初始化逻辑 ---
-
 function initializePlugin() {
     console.log("[Museum] 初始化...");
 
@@ -1115,7 +1105,6 @@ function initializePlugin() {
 
     // 绑定事件
     $('#museum-config-toggle').on('click', () => $('#museum-auth-panel').slideToggle());
-        // 绑定一键抓取主题事件
     $('#museum-auto-capture-theme').on('click', handleAutoCaptureTheme);
 
     $('#museum-save-btn').on('click', async () => {
@@ -1134,32 +1123,23 @@ function initializePlugin() {
         }
     });
 
-    $('.museum-filter-btn').on('click', function() {
-        $('.museum-filter-btn').removeClass('active');
-        $(this).addClass('active');
-        currentFilter = $(this).data('filter');
-        refreshGallery();
-    });
-
     $('#museum-refresh-btn').on('click', refreshGallery);
-    // 【新增】搜索框输入事件（防抖处理提升手感）
+    
     let searchTimeout;
     $('#museum-search-input').on('input', function() {
         clearTimeout(searchTimeout);
         const val = $(this).val().trim();
         searchTimeout = setTimeout(() => {
             currentSearchQuery = val;
-            applyFiltersAndRender(); // 触发本地重新过滤
-        }, 300); // 300ms 延迟
+            applyFiltersAndRender();
+        }, 300);
     });
 
-    // 原有的 filter-btn 修改，切换分类时清空搜索和标签
     $('.museum-filter-btn').off('click').on('click', function() {
         $('.museum-filter-btn').removeClass('active');
         $(this).addClass('active');
         currentFilter = $(this).data('filter');
         
-        // 切换大分类时，清理搜索框和选中标签
         currentSearchQuery = '';
         currentSelectedTag = '';
         $('#museum-search-input').val('');
@@ -1167,11 +1147,26 @@ function initializePlugin() {
         refreshGallery();
     });
 
-    loadSupabase().then(() => {
-        const s = getExtensionSettings()[EXTENSION_NAME];
-        if (s && s.sbUrl && s.sbKey) {
-            initSupabaseClient().then(() => {
-                if (session) refreshGallery();
+    // 【完美修复】iOS 崩溃核心解法：延迟/懒加载
+    let hasLoadedGallery = false;
+    
+    // 监听博物馆抽屉的点击展开事件
+    $(`#${EXTENSION_ID} .inline-drawer-toggle`).on('click', function() {
+        const $content = $(this).next('.inline-drawer-content');
+        // 当内容即将展开（此刻为 hidden），且尚未加载过时触发
+        if ($content.is(':hidden') && !hasLoadedGallery) {
+            hasLoadedGallery = true; // 标记为已加载
+            
+            // 确保 Supabase 初始化后再去拉取
+            loadSupabase().then(() => {
+                const s = getExtensionSettings()[EXTENSION_NAME];
+                if (s && s.sbUrl && s.sbKey) {
+                    initSupabaseClient().then(() => {
+                        if (session) refreshGallery();
+                    });
+                } else {
+                    $('#museum-grid').html('<div style="text-align:center; padding:20px; font-size:0.8em; opacity:0.7;">未配置数据库。<br>请点击上方齿轮配置。</div>');
+                }
             });
         }
     });
