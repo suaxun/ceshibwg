@@ -896,6 +896,141 @@ async function importBeautifyDirectly(item, $card) {
 }
 
 
+// ====== 新增：一键抓取并上传主题功能 ======
+async function handleAutoCaptureTheme() {
+    if (!supabase || !session) {
+        toast.error("请先在设置中连接并登录 Supabase");
+        return;
+    }
+
+    // 1. 获取酒馆里当前选中的主题数据
+    let themeIndex = $('#themes').val();
+    let themeJsonObj = {};
+    let themeName = "未命名主题";
+
+    if (window.themes && window.themes[themeIndex]) {
+        // 【完美修复】直接深拷贝酒馆自带的完整主题数据，这和原生导出按钮一模一样
+        themeJsonObj = JSON.parse(JSON.stringify(window.themes[themeIndex]));
+        
+        // 获取纯净的名字（去除未保存时的星号）
+        let uiName = $('#themes option:selected').text();
+        if (uiName) uiName = uiName.replace(/^\*\s*/, '').trim();
+        
+        themeName = themeJsonObj.name || uiName;
+        // 确保导出文件内包含正确的 name 字段
+        themeJsonObj.name = themeName;
+    } else {
+        toast.error("获取当前主题数据失败，请确保您选中了一个主题。");
+        return;
+    }
+
+    const themeCategory = prompt("给主题打上标签 (空格隔开，直接点确定表示不加标签)：", "自用 主题");
+    if (themeCategory === null) return; // 用户点击取消
+
+    const $btn = $('#museum-auto-capture-theme');
+    const originalText = $btn.html();
+    $btn.html('<i class="fa-solid fa-spinner fa-spin"></i> 正在抓取...').css('pointer-events', 'none');
+    toast.info("正在抓取纯净聊天界面，屏幕可能会闪烁一下...");
+
+    try {
+        const jsonString = JSON.stringify(themeJsonObj, null, 2);
+        const jsonBlob = new Blob([jsonString], { type: "application/json" });
+
+        // 3. 加载 html2canvas
+        if (!window.html2canvas) {
+            await new Promise((res, rej) => {
+                const script = document.createElement('script');
+                script.src = "https://html2canvas.hertzen.com/dist/html2canvas.min.js";
+                script.onload = res;
+                script.onerror = rej;
+                document.head.appendChild(script);
+            });
+        }
+
+        // 4. 隐藏多余面板
+        const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
+        $hiddenElements.hide(); 
+        await new Promise(r => setTimeout(r, 150)); 
+
+        // 提取当前的背景底色，如果完全透明则给一个深色底，防止截图崩坏
+        const rs = getComputedStyle(document.documentElement);
+        let bgColor = (rs.getPropertyValue('--SmartThemeBgColor') || "").trim();
+        if (!bgColor || bgColor === 'transparent' || bgColor === 'rgba(0, 0, 0, 0)') {
+            bgColor = '#131516'; // 兜底深灰色
+        }
+
+        const canvas = await html2canvas(document.body, {
+            useCORS: true,
+            allowTaint: true,
+            backgroundColor: bgColor, // 填补背景，防止消息和头像变透明
+            scale: 1, // 强行将清晰度锁为1，极大降低 iOS 闪退率
+            logging: false
+        });
+
+        // 恢复 UI
+        $hiddenElements.show();
+
+        const imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+
+        // 5. 上传
+        const uid = session.user.id;
+        const timestamp = Date.now();
+        const rand = Math.random().toString(36).substr(2, 5);
+        
+        // 【核心修复】：上传到云端的文件名必须是纯英文/数字，否则 Supabase 存储桶会报错 Invalid key
+        const imgName = `beautify_prev_${timestamp}_${rand}.png`;
+        const jsonName = `beautify_file_${timestamp}_${rand}.json`;
+
+        $btn.html('<i class="fa-solid fa-cloud-arrow-up"></i> 正在上传至云端...');
+
+        const { error: imgErr } = await supabase.storage.from('uploads').upload(imgName, imgBlob);
+        if (imgErr) throw imgErr;
+        const imgUrl = supabase.storage.from('uploads').getPublicUrl(imgName).data.publicUrl;
+
+        const { error: jsonErr } = await supabase.storage.from('uploads').upload(jsonName, jsonBlob);
+        if (jsonErr) throw jsonErr;
+        const jsonUrl = supabase.storage.from('uploads').getPublicUrl(jsonName).data.publicUrl;
+
+        // 6. 入库
+        const contentObj = {
+            title: themeName, // 数据库显示的标题依然用中文
+            variations: [
+                {
+                    name: "主配色",
+                    color: themeJsonObj.quote_text_color || "#ffffff",
+                    preview: imgUrl,
+                    file: jsonUrl
+                }
+            ]
+        };
+
+        const payload = {
+            type: 'beautify',
+            category: themeCategory ? themeCategory.trim() : "快捷抓取",
+            content: JSON.stringify(contentObj),
+            file_url: imgUrl, 
+            user_id: uid
+        };
+
+        const { error: dbErr } = await supabase.from('fragments').insert(payload);
+        if (dbErr) throw dbErr;
+
+        toast.success(`🎉 主题 "${themeName}" 已成功上传！`);
+        
+        currentFilter = 'beautify';
+        $('.museum-filter-btn').removeClass('active');
+        $(`[data-filter='beautify']`).addClass('active');
+        refreshGallery();
+
+    } catch (e) {
+        console.error("[Museum Capture Error]", e);
+        toast.error("上传失败: " + e.message);
+        $('.drawer, #top-bar, #toast-container, #movingDivs').show(); // 确保出错了也会恢复UI
+    } finally {
+        $btn.html(originalText).css('pointer-events', 'auto');
+    }
+}
+// ====== 修改结束 ======
 
 
 // --- 界面创建 ---
