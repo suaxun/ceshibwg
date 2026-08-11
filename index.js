@@ -973,17 +973,17 @@ async function handleAutoCaptureTheme() {
 
         // 提取主题名字（去掉 .json 后缀）
         let themeName = fileName.replace(/\.json$/i, '');
-
-           // ==========================================
-        // 2. 截图当前聊天界面 (修复背景图丢失、头像透明问题)
+        // ==========================================
+        // 2. 截图当前聊天界面 (彻底修复伪元素背景图和负z-index丢失问题)
         // ==========================================
         $btn.html('<i class="fa-solid fa-camera fa-spin"></i> 正在截取聊天预览图...');
-        toast.info("正在抓取界面，屏幕可能会闪烁一下...");
+        toast.info("正在抓取界面，请勿操作...");
         
         if (!window.html2canvas) {
             await new Promise((res, rej) => {
                 const script = document.createElement('script');
-                script.src = "https://html2canvas.hertzen.com/dist/html2canvas.min.js";
+                // 【修复】改用 1.4.1 最新稳定版，对复杂 CSS 和外部 URL 支持更好
+                script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
                 script.onload = res;
                 script.onerror = rej;
                 document.head.appendChild(script);
@@ -994,35 +994,48 @@ async function handleAutoCaptureTheme() {
         const $hiddenElements = $('.drawer, #top-bar, #toast-container, #movingDivs');
         $hiddenElements.hide(); 
         
-        // 【关键修复1】强制取消所有图片的懒加载，防止截出透明头像
+        // 强制取消所有图片的懒加载，防止头像透明
         $('img[loading="lazy"]').attr('loading', 'eager');
         
-        // 【关键修复2】html2canvas 不支持高斯模糊(backdrop-filter)。
-        // 为了防止半透明消息框在截图里彻底看不清，稍微给点补救样式，截图完删掉
+        // 【终极魔法：解决外部 URL 背景 + 负 z-index 丢失问题】
         const tempStyle = document.createElement('style');
         tempStyle.id = 'museum-screenshot-fix';
-        tempStyle.innerHTML = `.mes { backdrop-filter: none !important; }`;
+        tempStyle.innerHTML = `
+            /* 1. 移除可能导致 html2canvas 崩溃的高斯模糊 */
+            .mes { backdrop-filter: none !important; }
+            
+            /* 2. 修复 ::before/::after 负 z-index 丢失的核心代码 */
+            /* 强制给 .mes 加上 z-index: 0 建立局部层叠上下文，把伪元素“兜住” */
+            .mes { z-index: 0 !important; }
+            
+            /* 3. 确立明确的层级，确保背景图不会反而把文字遮挡住 */
+            .mes::before { z-index: -2 !important; }
+            .mes::after { z-index: -1 !important; }
+            
+            /* 4. 确保消息主体内容稳稳待在背景之上 */
+            .mes_block, .mesAvatarWrapper, .mes_media_wrapper, .mes_file_wrapper {
+                position: relative !important;
+                z-index: 2 !important;
+            }
+        `;
         document.head.appendChild(tempStyle);
 
-        // 多等一会儿，确保图片加载完毕且界面重绘完成
-        await new Promise(r => setTimeout(r, 500)); 
+        // 多给 800 毫秒时间，让浏览器重新排版并彻底加载外部图床(img.baidu.re)的图片
+        await new Promise(r => setTimeout(r, 800)); 
 
-        // 【关键修复3】配置 html2canvas
         const canvas = await html2canvas(document.body, {
-            useCORS: true,           // 必须开启：允许跨域加载外部 URL 背景图
-            backgroundColor: null,   // 必须为null：保持透明，让底层的 #bg1 背景图透出来！不要强塞颜色！
-            scale: window.devicePixelRatio || 1, // 保证清晰度
-            windowWidth: window.innerWidth,
-            windowHeight: window.innerHeight,
-            logging: false
-            // 绝对不能加 allowTaint: true，否则会导致带外部链接的画布无法输出图片
+            useCORS: true,           // 【必须开启】允许跨域拉取你放在百度/其他图床的链接图
+            backgroundColor: null,   // 保持底层大背景透明，不要用实色盖住底图
+            scale: window.devicePixelRatio || 1, 
+            logging: true            // 开启内部日志，如果还报错按 F12 就能看到原因
         });
 
-        // 恢复界面
+        // 恢复所有被隐藏的面板和样式
         $hiddenElements.show(); 
-        $('#museum-screenshot-fix').remove(); // 移除补救样式
+        $('#museum-screenshot-fix').remove();
 
         const imgBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+
 
 
         // ==========================================
